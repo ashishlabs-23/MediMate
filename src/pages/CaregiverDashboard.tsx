@@ -289,28 +289,41 @@ export function CaregiverDashboard() {
     // Load 7-day adherence history
     const startDate = last7Dates[0] ?? date;
     const endDate = last7Dates[last7Dates.length - 1] ?? date;
-    getDoseLogsForDateRange(patientId, startDate, endDate)
-      .then((logs) => {
-        if (cancelled) return;
-        if (logs.length > 0) {
-          setHistoryDoses(logs);
-        } else if (patientId === 'patient_ramesh') {
-          setHistoryDoses(getMockDoseLogsForRange(patientId, last7Dates));
-        } else {
-          setHistoryDoses([]);
-        }
-        setIsHistoryLoading(false);
-      })
-      .catch((err) => {
-        console.warn('7-day history fallback:', err);
-        if (cancelled) return;
-        if (patientId === 'patient_ramesh' || isDemoSession) {
-          setHistoryDoses(getMockDoseLogsForRange(patientId, last7Dates));
-        } else {
-          setHistoryDoses([]);
-        }
-        setIsHistoryLoading(false);
-      });
+    const historyPromise = getDoseLogsForDateRange(patientId, startDate, endDate) as
+      | Promise<DoseLogDocument[]>
+      | undefined;
+
+    if (historyPromise && typeof historyPromise.then === 'function') {
+      historyPromise
+        .then((logs) => {
+          if (cancelled) return;
+          if (logs.length > 0) {
+            setHistoryDoses(logs);
+          } else if (patientId === 'patient_ramesh') {
+            setHistoryDoses(getMockDoseLogsForRange(patientId, last7Dates));
+          } else {
+            setHistoryDoses([]);
+          }
+          setIsHistoryLoading(false);
+        })
+        .catch((err) => {
+          console.warn('7-day history fallback:', err);
+          if (cancelled) return;
+          if (patientId === 'patient_ramesh' || isDemoSession) {
+            setHistoryDoses(getMockDoseLogsForRange(patientId, last7Dates));
+          } else {
+            setHistoryDoses([]);
+          }
+          setIsHistoryLoading(false);
+        });
+    } else {
+      if (patientId === 'patient_ramesh' || isDemoSession) {
+        setHistoryDoses(getMockDoseLogsForRange(patientId, last7Dates));
+      } else {
+        setHistoryDoses([]);
+      }
+      setIsHistoryLoading(false);
+    }
 
     return () => {
       cancelled = true;
@@ -927,10 +940,31 @@ export function CaregiverDashboard() {
               <div className="h-7 w-7 animate-spin rounded-full border-4 border-brand-teal border-t-transparent" />
             </div>
           ) : medications.length === 0 ? (
-            <div className="rounded-card bg-surface border border-slate-200 p-6 text-center">
-              <p className="text-sm text-ink-secondary">
-                No prescriptions added yet. Use &ldquo;+ Add Medication&rdquo; to set up a reminder schedule.
-              </p>
+            <div
+              data-testid="empty-medications-state"
+              className="rounded-card bg-surface border-2 border-dashed border-slate-300 p-8 text-center space-y-3"
+            >
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-teal-50 text-brand-teal">
+                <Plus className="w-6 h-6" aria-hidden="true" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-bold text-ink-primary">
+                  No prescriptions added yet
+                </h3>
+                <p className="text-sm text-ink-secondary max-w-md mx-auto">
+                  Add {patientName}&apos;s first medication schedule to enable automated daily dose logs, reminders, and caregiver escalation tracking.
+                </p>
+              </div>
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={openAddModal}
+                  className="min-h-touch min-w-touch inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-btn bg-brand-teal text-white text-sm font-bold hover:bg-brand-teal-dark focus:outline-none focus:ring-[3px] focus:ring-focus focus:ring-offset-2 transition-colors shadow-sm"
+                >
+                  <Plus className="w-4 h-4" aria-hidden="true" />
+                  <span>Add First Medication</span>
+                </button>
+              </div>
             </div>
           ) : (
             <div className="space-y-3">

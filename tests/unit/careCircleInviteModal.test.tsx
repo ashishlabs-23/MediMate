@@ -13,9 +13,29 @@ import type {
   UserDocument,
 } from '../../src/types/firestore';
 
-const mockInviteCareCircleMember = vi.fn<
-  (patientId: string, member: CareCircleMember) => Promise<void>
->();
+const {
+  mockInviteCareCircleMember,
+  mockGetDoc,
+  mockUpdateDoc,
+  mockSetDoc,
+} = vi.hoisted(() => ({
+  mockInviteCareCircleMember: vi.fn<
+    (patientId: string, member: CareCircleMember) => Promise<void>
+  >(),
+  mockGetDoc: vi.fn(),
+  mockUpdateDoc: vi.fn(async () => {}),
+  mockSetDoc: vi.fn(async () => {}),
+}));
+
+vi.mock('firebase/firestore', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('firebase/firestore')>();
+  return {
+    ...actual,
+    getDoc: (...args: unknown[]) => mockGetDoc(...args),
+    updateDoc: (...args: unknown[]) => mockUpdateDoc(...args),
+    setDoc: (...args: unknown[]) => mockSetDoc(...args),
+  };
+});
 
 const mockAuthState: AuthContextValue = {
   firebaseUser: { uid: 'caregiver_priya' } as unknown as User,
@@ -67,11 +87,11 @@ vi.mock('../../src/lib/firestore', () => ({
     cb([]);
     return vi.fn();
   },
-  getDoseLogsForDateRange: vi.fn().mockResolvedValue([]),
-  updateDoseLog: vi.fn().mockResolvedValue(undefined),
+  getDoseLogsForDateRange: () => Promise.resolve([]),
+  updateDoseLog: () => Promise.resolve(undefined),
   createMedication: vi.fn(),
-  updateMedication: vi.fn().mockResolvedValue(undefined),
-  setMedicationActive: vi.fn().mockResolvedValue(undefined),
+  updateMedication: () => Promise.resolve(undefined),
+  setMedicationActive: () => Promise.resolve(undefined),
   inviteCareCircleMember: (patientId: string, member: CareCircleMember) =>
     mockInviteCareCircleMember(patientId, member),
 }));
@@ -392,7 +412,7 @@ describe('CareCircleInviteModal', () => {
       name: /view dose schedule/i,
     }) as HTMLInputElement;
     const writeCheckbox = within(dialog).getByRole('checkbox', {
-      name: /schedule|edit|write/i,
+      name: /edit & write|write prescriptions/i,
     }) as HTMLInputElement;
     const alertsCheckbox = within(dialog).getByRole('checkbox', {
       name: /receive missed-dose alerts/i,
@@ -651,43 +671,16 @@ describe('CaregiverDashboard Care Circle Invite integration', () => {
 
 describe('inviteCareCircleMember Firestore helper', () => {
   afterEach(() => {
-    vi.doUnmock('firebase/firestore');
-    vi.doUnmock('../../src/lib/firebase');
-    vi.resetModules();
     vi.restoreAllMocks();
   });
 
   it('U-4D-11: updates existing care circle with email deduplication and initializes missing care circle via setDoc', async () => {
-    vi.resetModules();
-    vi.unmock('../../src/lib/firestore');
-
-    const actualFirestore = await vi.importActual<typeof import('firebase/firestore')>(
-      'firebase/firestore'
+    const { inviteCareCircleMember } = await vi.importActual<typeof import('../../src/lib/firestore')>(
+      '../../src/lib/firestore'
     );
-    const mockGetDoc = vi.fn();
-    const mockUpdateDoc = vi.fn(async () => {});
-    const mockSetDoc = vi.fn(async () => {});
-    const mockServerTimestamp = vi.fn(() => ({ _methodName: 'serverTimestamp' }));
-    const mockDoc = vi.fn((colRef: unknown, id?: string) => ({ colRef, id }));
-    const mockCollection = vi.fn((_db: unknown, name: string) => ({
-      name,
-      withConverter: () => ({ name }),
-    }));
-
-    vi.doMock('../../src/lib/firebase', () => ({
-      db: { name: 'mock-db' },
-    }));
-    vi.doMock('firebase/firestore', () => ({
-      ...actualFirestore,
-      collection: mockCollection,
-      doc: mockDoc,
-      getDoc: mockGetDoc,
-      updateDoc: mockUpdateDoc,
-      setDoc: mockSetDoc,
-      serverTimestamp: mockServerTimestamp,
-    }));
-
-    const { inviteCareCircleMember } = await import('../../src/lib/firestore');
+    mockGetDoc.mockReset();
+    mockUpdateDoc.mockReset();
+    mockSetDoc.mockReset();
 
     const existingMember: CareCircleMember = {
       userId: 'caregiver_priya',

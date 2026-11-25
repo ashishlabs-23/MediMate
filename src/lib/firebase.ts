@@ -9,13 +9,18 @@
 import { initializeApp, type FirebaseApp } from 'firebase/app';
 import { getAuth, type Auth } from 'firebase/auth';
 import {
+  arrayUnion,
+  doc,
   getFirestore,
   initializeFirestore,
   persistentLocalCache,
   persistentMultipleTabManager,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
   type Firestore,
 } from 'firebase/firestore';
-import { getMessaging, isSupported, type Messaging } from 'firebase/messaging';
+import { getMessaging, getToken, isSupported, type Messaging } from 'firebase/messaging';
 
 const measurementId =
   import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || 'G-BPZBXQVGXW';
@@ -78,3 +83,71 @@ export async function getMessagingInstance(): Promise<Messaging | null> {
 }
 
 export const VAPID_KEY = import.meta.env.VITE_FIREBASE_VAPID_KEY as string | undefined;
+
+/**
+ * Registers an FCM push registration token for the user device,
+ * persisting it to users/{uid}.fcmTokens via arrayUnion.
+ * Returns the token string on success, or null on error / unsupported environment.
+ */
+export async function registerFcmToken(uid: string): Promise<string | null> {
+  if (!uid) return null;
+  if (uid.startsWith('demo_') || uid === 'patient_ramesh' || uid === 'caregiver_priya') {
+    return 'demo-fcm-token-registered';
+  }
+
+  try {
+    const messaging = await getMessagingInstance();
+    if (!messaging) {
+      console.warn('FCM messaging is not supported in this browser.');
+      return null;
+    }
+
+    let serviceWorkerRegistration: ServiceWorkerRegistration | undefined;
+    if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+      try {
+        serviceWorkerRegistration = await navigator.serviceWorker.ready;
+      } catch (swErr) {
+        console.warn('Service worker registration lookup failed:', swErr);
+      }
+    }
+
+    const tokenOptions: {
+      vapidKey?: string;
+      serviceWorkerRegistration?: ServiceWorkerRegistration;
+    } = {};
+    if (VAPID_KEY) {
+      tokenOptions.vapidKey = VAPID_KEY;
+    }
+    if (serviceWorkerRegistration) {
+      tokenOptions.serviceWorkerRegistration = serviceWorkerRegistration;
+    }
+
+    const token = await getToken(messaging, tokenOptions);
+
+    if (!token) {
+      return null;
+    }
+
+    const userRef = doc(db, 'users', uid);
+    try {
+      await updateDoc(userRef, {
+        fcmTokens: arrayUnion(token),
+        updatedAt: serverTimestamp(),
+      });
+    } catch {
+      await setDoc(
+        userRef,
+        {
+          fcmTokens: arrayUnion(token),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+
+    return token;
+  } catch (err) {
+    console.warn('Failed to register FCM token for user:', err);
+    return null;
+  }
+}

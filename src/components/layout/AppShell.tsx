@@ -242,6 +242,7 @@ export function AppShell({ children }: AppShellProps) {
         onClose={() => setIsSettingsOpen(false)}
         preferences={effectivePrefs}
         onUpdatePreferences={handleUpdatePreferences}
+        userId={uid}
       />
     </div>
   );

@@ -375,9 +375,20 @@ export function TodayView() {
 
         {/* Empty state */}
         {!isLoading && doses.length === 0 && (
-          <div className="rounded-card bg-surface border border-slate-200 p-8 text-center">
-            <p className="text-lg text-ink-secondary">No doses scheduled for today.</p>
-            <p className="mt-2 text-sm text-ink-muted">Enjoy your day! 🌟</p>
+          <div
+            data-testid="empty-today-state"
+            className="rounded-card bg-surface border border-slate-200 p-8 text-center space-y-3"
+          >
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-teal-50 text-brand-teal">
+              <span className="text-2xl" aria-hidden="true">💊</span>
+            </div>
+            <h2 className="text-lg font-bold text-ink-primary">
+              No prescriptions scheduled today
+            </h2>
+            <p className="text-sm text-ink-secondary max-w-sm mx-auto">
+              You are all caught up! Your caregiver can add or adjust prescriptions from the Caregiver Dashboard.
+            </p>
+            <p className="text-xs text-ink-muted">Enjoy your day! 🌟</p>
           </div>
         )}
 

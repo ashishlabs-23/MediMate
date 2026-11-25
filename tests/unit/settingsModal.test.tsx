@@ -36,6 +36,7 @@ const {
 
 vi.mock('../../src/lib/firebase', () => ({
   auth: { name: 'mock-auth' },
+  registerFcmToken: vi.fn().mockResolvedValue('mock-fcm-token'),
 }));
 
 vi.mock('firebase/auth', () => ({

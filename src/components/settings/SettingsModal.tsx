@@ -12,12 +12,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { Bell, BellOff, Contrast, Type, Vibrate, Volume2, X } from 'lucide-react';
 import type { AccessibilityPreferences } from '../../types/firestore';
+import { registerFcmToken } from '../../lib/firebase';
 
 export interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   preferences: AccessibilityPreferences;
   onUpdatePreferences: (patch: Partial<AccessibilityPreferences>) => Promise<void> | void;
+  userId?: string;
 }
 
 type NotificationStatus = NotificationPermission | 'unsupported';
@@ -46,6 +48,7 @@ export function SettingsModal({
   onClose,
   preferences,
   onUpdatePreferences,
+  userId,
 }: SettingsModalProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -162,6 +165,13 @@ export function SettingsModal({
       setNotificationStatus(result);
       if (result === 'granted') {
         setAnnouncement('Browser notifications enabled.');
+        if (userId && typeof registerFcmToken === 'function') {
+          try {
+            await registerFcmToken(userId);
+          } catch (fcmErr) {
+            console.warn('Failed to register FCM token after granting permission:', fcmErr);
+          }
+        }
       } else if (result === 'denied') {
         setAnnouncement('Browser notifications were blocked.');
       } else {

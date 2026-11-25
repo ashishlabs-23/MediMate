@@ -588,17 +588,17 @@ export function CareCircleInviteModal({
                         aria-describedby={descId}
                         className="mt-1 h-4 w-4 rounded border-slate-300 text-brand-teal focus:ring-[3px] focus:ring-focus cursor-pointer"
                       />
-                      <label
-                        htmlFor={checkboxId}
-                        className="min-w-0 cursor-pointer"
-                      >
-                        <span className="block text-sm font-semibold text-ink-primary">
+                      <div className="min-w-0">
+                        <label
+                          htmlFor={checkboxId}
+                          className="block text-sm font-semibold text-ink-primary cursor-pointer"
+                        >
                           {opt.label}
-                        </span>
+                        </label>
                         <span id={descId} className="block text-xs text-ink-secondary">
                           {opt.description}
                         </span>
-                      </label>
+                      </div>
                     </div>
                   );
                 })}

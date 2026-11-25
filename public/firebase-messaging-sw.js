@@ -1,10 +1,11 @@
 /**
- * firebase-messaging-sw.js — FCM Service Worker for background push notifications.
+ * firebase-messaging-sw.js — FCM Service Worker for background push notifications & offline asset caching.
  *
  * This file must be served from the root path (/firebase-messaging-sw.js).
- * It handles background FCM messages when the app is not in the foreground.
+ * It handles:
+ *   1. Offline PWA launch: Cache-first static asset caching (HTML shell, /icons/*, /manifest.json, bundled assets)
+ *   2. Background FCM push messages when the app is not in the foreground.
  *
- * IMPORTANT: Keep this file in sync with the Firebase SDK version used in the app.
  * Uses Firebase compat SDK (not modular) for service worker compatibility.
  */
 
@@ -12,8 +13,107 @@
 importScripts('https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js');
 
-// Firebase config must match src/lib/firebase.ts.
-// These values are safe to include in a service worker (not secret).
+// ── Cache Configuration ──────────────────────────────────────────────────────
+const CACHE_NAME = 'medimate-static-v1';
+const PRECACHE_ASSETS = [
+  '/',
+  '/index.html',
+  '/manifest.json',
+  '/favicon.ico',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+  '/icons/icon-maskable-512.png',
+];
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches
+      .open(CACHE_NAME)
+      .then((cache) => cache.addAll(PRECACHE_ASSETS))
+      .then(() => self.skipWaiting())
+      .catch((err) => {
+        console.warn('[firebase-messaging-sw.js] Precache failed during install:', err);
+      })
+  );
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches
+      .keys()
+      .then((cacheNames) =>
+        Promise.all(
+          cacheNames
+            .filter((name) => name !== CACHE_NAME)
+            .map((name) => caches.delete(name))
+        )
+      )
+      .then(() => self.clients.claim())
+  );
+});
+
+/**
+ * Fetch interceptor:
+ * - Cache-first for same-origin static assets and bundled JS/CSS
+ * - Network-with-cache-fallback for navigation requests so PWA launches offline
+ * - Cross-origin requests (e.g. Firebase, Firestore, Google APIs) pass through untouched
+ */
+self.addEventListener('fetch', (event) => {
+  const request = event.request;
+  if (request.method !== 'GET') return;
+
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) {
+    return;
+  }
+
+  // Navigation requests (HTML document loads)
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const copy = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put('/index.html', copy));
+          }
+          return networkResponse;
+        })
+        .catch(async () => {
+          const cachedShell = await caches.match('/index.html');
+          if (cachedShell) return cachedShell;
+          return caches.match('/');
+        })
+    );
+    return;
+  }
+
+  // Static assets (bundled JS/CSS, images, icons, manifest)
+  const isStaticAsset =
+    url.pathname.startsWith('/assets/') ||
+    url.pathname.startsWith('/icons/') ||
+    url.pathname === '/manifest.json' ||
+    url.pathname === '/favicon.ico' ||
+    /\.(?:js|css|png|jpg|jpeg|svg|webp|ico|woff2?)$/i.test(url.pathname);
+
+  if (isStaticAsset) {
+    event.respondWith(
+      caches.match(request).then((cachedResponse) => {
+        if (cachedResponse) {
+          return cachedResponse;
+        }
+        return fetch(request).then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const copy = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          }
+          return networkResponse;
+        });
+      })
+    );
+  }
+});
+
+// ── Firebase Configuration ────────────────────────────────────────────────────
 const firebaseConfig = {
   apiKey: 'AIzaSyCMcRRpvdvnfNyebPEBjHH6EyKaCK_7boc',
   authDomain: 'medimate-e27da.firebaseapp.com',
