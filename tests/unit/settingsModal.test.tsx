@@ -23,6 +23,7 @@ const {
   mockFirebaseSignOut,
   mockGetUserDocument,
   mockUpdateUserAccessibilityPreferences,
+  mockRegisterFcmToken,
 } = vi.hoisted(() => ({
   mockOnAuthStateChanged: vi.fn<
     (auth: unknown, onNext: AuthCallback, onError?: (err: Error) => void) => () => void
@@ -32,11 +33,12 @@ const {
   mockUpdateUserAccessibilityPreferences: vi.fn<
     (uid: string, prefs: AccessibilityPreferences) => Promise<void>
   >(),
+  mockRegisterFcmToken: vi.fn().mockResolvedValue('mock-fcm-token'),
 }));
 
 vi.mock('../../src/lib/firebase', () => ({
   auth: { name: 'mock-auth' },
-  registerFcmToken: vi.fn().mockResolvedValue('mock-fcm-token'),
+  registerFcmToken: (...args: unknown[]) => mockRegisterFcmToken(...args),
 }));
 
 vi.mock('firebase/auth', () => ({
@@ -413,6 +415,24 @@ describe('SettingsModal', () => {
     );
     expect(screen.getByTestId('notification-status-badge')).toHaveTextContent('Unsupported');
     expect(screen.getByText(/does not support Web Notifications/i)).toBeInTheDocument();
+
+    // 5. Registers FCM token when userId is provided and permission is granted
+    mockRegisterFcmToken.mockClear();
+    setMockNotification('default', async () => 'granted');
+    render(
+      <SettingsModal
+        isOpen={true}
+        onClose={vi.fn()}
+        preferences={DEFAULT_PREFS}
+        onUpdatePreferences={vi.fn()}
+        userId="user-test-fcm-uid"
+      />
+    );
+    const triggerBtn = screen.getByRole('button', { name: 'Enable Browser Notifications' });
+    fireEvent.click(triggerBtn);
+    await waitFor(() => {
+      expect(mockRegisterFcmToken).toHaveBeenCalledWith('user-test-fcm-uid');
+    });
   });
 });
 

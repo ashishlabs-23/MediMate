@@ -19,21 +19,32 @@ const PRECACHE_ASSETS = [
   '/',
   '/index.html',
   '/manifest.json',
-  '/favicon.ico',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/icons/icon-maskable-512.png',
+  '/icons/apple-touch-icon.png',
 ];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches
       .open(CACHE_NAME)
-      .then((cache) => cache.addAll(PRECACHE_ASSETS))
+      .then((cache) =>
+        Promise.all(
+          PRECACHE_ASSETS.map((asset) =>
+            fetch(asset, { cache: 'no-cache' })
+              .then((response) => {
+                if (response && response.status === 200) {
+                  return cache.put(asset, response);
+                }
+              })
+              .catch((err) => {
+                console.warn('[firebase-messaging-sw.js] Failed to cache asset:', asset, err);
+              })
+          )
+        )
+      )
       .then(() => self.skipWaiting())
-      .catch((err) => {
-        console.warn('[firebase-messaging-sw.js] Precache failed during install:', err);
-      })
   );
 });
 
@@ -79,9 +90,12 @@ self.addEventListener('fetch', (event) => {
           return networkResponse;
         })
         .catch(async () => {
-          const cachedShell = await caches.match('/index.html');
+          const cachedShell = (await caches.match('/index.html')) || (await caches.match('/'));
           if (cachedShell) return cachedShell;
-          return caches.match('/');
+          return new Response(
+            '<!doctype html><html><head><meta charset="utf-8"><title>MediMate Offline</title></head><body style="font-family:sans-serif;padding:24px;text-align:center;"><h1>MediMate is offline</h1><p>Please reconnect to load fresh medication data.</p></body></html>',
+            { headers: { 'Content-Type': 'text/html' } }
+          );
         })
     );
     return;
@@ -92,7 +106,6 @@ self.addEventListener('fetch', (event) => {
     url.pathname.startsWith('/assets/') ||
     url.pathname.startsWith('/icons/') ||
     url.pathname === '/manifest.json' ||
-    url.pathname === '/favicon.ico' ||
     /\.(?:js|css|png|jpg|jpeg|svg|webp|ico|woff2?)$/i.test(url.pathname);
 
   if (isStaticAsset) {

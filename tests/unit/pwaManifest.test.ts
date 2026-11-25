@@ -377,4 +377,34 @@ describe('PWA Branded Icons, Manifest, and HTML Metadata', () => {
     expect(doc.querySelector('noscript')).not.toBeNull();
     expect(doc.querySelector('script[type="module"][src="/src/main.tsx"]')).not.toBeNull();
   });
+
+  it('declares valid offline precache assets in firebase-messaging-sw.js that exist on disk', () => {
+    const swPath = path.join(PUBLIC_DIR, 'firebase-messaging-sw.js');
+    expect(fs.existsSync(swPath)).toBe(true);
+
+    const swContent = fs.readFileSync(swPath, 'utf8');
+    const match = swContent.match(/const PRECACHE_ASSETS = \[(.*?)\];/s);
+    expect(match).not.toBeNull();
+
+    const precacheList: string[] = Array.from(
+      match![1].matchAll(/['"]([^'"]+)['"]/g),
+      (m) => m[1]
+    );
+    expect(precacheList).toContain('/index.html');
+    expect(precacheList).toContain('/manifest.json');
+    expect(precacheList).toContain('/icons/icon-192.png');
+    expect(precacheList).toContain('/icons/icon-512.png');
+    expect(precacheList).toContain('/icons/icon-maskable-512.png');
+    expect(precacheList).toContain('/icons/apple-touch-icon.png');
+    expect(precacheList).not.toContain('/favicon.ico');
+
+    for (const asset of precacheList) {
+      if (asset === '/' || asset === '/index.html') {
+        expect(fs.existsSync(path.join(ROOT_DIR, 'index.html'))).toBe(true);
+      } else {
+        const filePath = path.join(PUBLIC_DIR, asset.replace(/^\//, ''));
+        expect(fs.existsSync(filePath), `Precache asset ${asset} must exist at ${filePath}`).toBe(true);
+      }
+    }
+  });
 });
