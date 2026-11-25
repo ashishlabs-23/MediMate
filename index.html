@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#115E59" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="MediMate" />
+    <meta name="description" content="MediMate — Smart Medication Reminder for Older Adults and Caregivers. UN SDG 3 — Good Health & Well-Being." />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+    <title>MediMate — Smart Medication Reminder</title>
+  </head>
+  <body class="bg-canvas text-ink-primary antialiased">
+    <div id="root">
+      <!-- Zero-latency accessible pre-loader: prevents white blank screen while JS bundles load -->
+      <div style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background-color: #F8FAFC; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #0F172A; padding: 24px; text-align: center;">
+        <div style="font-size: 48px; margin-bottom: 12px; line-height: 1;">💊</div>
+        <h1 style="font-size: 28px; font-weight: 800; color: #115E59; margin: 0 0 8px 0; letter-spacing: -0.5px;">MediMate</h1>
+        <p style="font-size: 14px; color: #475569; margin: 0 0 24px 0; max-width: 320px;">Smart Medication Reminder for Older Adults & Caregivers</p>
+        <div style="width: 36px; height: 36px; border: 3px solid #CCFBF1; border-top-color: #115E59; border-radius: 50%; animation: mm-spin 0.8s linear infinite;"></div>
+        <style>@keyframes mm-spin { to { transform: rotate(360deg); } }</style>
+      </div>
+    </div>
+    <noscript>
+      <div style="padding: 24px; text-align: center; color: #991B1B; font-family: sans-serif;">
+        <h2>JavaScript is required</h2>
+        <p>Please enable JavaScript in your browser to use MediMate.</p>
+      </div>
+    </noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

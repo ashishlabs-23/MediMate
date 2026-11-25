@@ -1,0 +1,113 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // Helper functions
+    // =========================================================================
+
+    // Returns true when the requesting user is authenticated.
+    function isAuthed() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    // Returns the UID of the requesting user.
+    function uid() {
+      return request.auth.uid;
+    }
+
+    // Returns true when the requesting user owns the given patientId.
+    function isSelf(patientId) {
+      return isAuthed() && uid() == patientId;
+    }
+
+    // Returns true for demo/academic evaluation records (patient_ramesh)
+    function isDemoPatient(patientId) {
+      return patientId == 'patient_ramesh';
+    }
+
+    // Returns true when an active care_circles document exists that links
+    // the requesting user (as caregiver) to the given patientId.
+    function isCaregiverFor(patientId) {
+      return isAuthed()
+        && exists(/databases/$(database)/documents/care_circles/$(patientId))
+        && uid() in get(/databases/$(database)/documents/care_circles/$(patientId)).data.caregiverIds;
+    }
+
+    // A user may access their own records, linked caregiver records, or demo evaluation records.
+    function canAccessPatient(patientId) {
+      return isDemoPatient(patientId) || isSelf(patientId) || isCaregiverFor(patientId);
+    }
+
+    // =========================================================================
+    // /users/{userId}
+    // =========================================================================
+    match /users/{userId} {
+      allow read: if isDemoPatient(userId) || (isAuthed() && (uid() == userId || isCaregiverFor(userId)));
+
+      allow create: if isDemoPatient(userId) || (isAuthed() && uid() == userId && request.resource.data.uid == userId);
+
+      allow update: if isDemoPatient(userId) || (isAuthed()
+        && uid() == userId
+        && request.resource.data.uid == userId
+        && !(resource.data.role == 'elderly' && request.resource.data.role != 'elderly'));
+
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // /care_circles/{patientId}
+    // =========================================================================
+    match /care_circles/{patientId} {
+      allow read: if isDemoPatient(patientId) || (isAuthed() && (uid() == patientId || (resource != null && uid() in resource.data.caregiverIds)));
+
+      allow create: if isDemoPatient(patientId) || (isAuthed() && uid() == patientId && request.resource.data.patientId == patientId);
+
+      allow update: if isDemoPatient(patientId) || (isAuthed()
+        && resource != null
+        && (uid() == patientId || uid() in resource.data.caregiverIds)
+        && request.resource.data.patientId == resource.data.patientId);
+
+      allow delete: if isAuthed() && uid() == patientId;
+    }
+
+    // =========================================================================
+    // /medications/{medicationId}
+    // =========================================================================
+    match /medications/{medicationId} {
+      allow read: if isDemoPatient(resource.data.patientId) || (isAuthed() && resource != null && canAccessPatient(resource.data.patientId));
+
+      allow create: if isDemoPatient(request.resource.data.patientId) || (isAuthed() && request.resource.data.patientId is string && canAccessPatient(request.resource.data.patientId));
+
+      allow update: if isDemoPatient(resource.data.patientId) || (isAuthed()
+        && resource != null
+        && canAccessPatient(resource.data.patientId)
+        && request.resource.data.patientId == resource.data.patientId);
+
+      allow delete: if isAuthed() && resource != null && canAccessPatient(resource.data.patientId);
+    }
+
+    // =========================================================================
+    // /dose_logs/{doseLogId}
+    // =========================================================================
+    match /dose_logs/{doseLogId} {
+      allow read: if isDemoPatient(resource.data.patientId) || (isAuthed() && resource != null && canAccessPatient(resource.data.patientId));
+
+      allow create: if isDemoPatient(request.resource.data.patientId) || (isAuthed()
+        && request.resource.data.patientId is string
+        && canAccessPatient(request.resource.data.patientId)
+        && request.resource.data.snoozeCount == 0);
+
+      allow update: if isDemoPatient(resource.data.patientId) || (isAuthed()
+        && resource != null
+        && canAccessPatient(resource.data.patientId)
+        && request.resource.data.patientId == resource.data.patientId
+        && !(resource.data.status == 'taken' && request.resource.data.status != 'taken')
+        && request.resource.data.snoozeCount >= resource.data.snoozeCount
+        && request.resource.data.snoozeCount <= 1);
+
+      allow delete: if false;
+    }
+  }
+}

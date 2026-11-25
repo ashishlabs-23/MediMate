@@ -1,0 +1,201 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 100%;
+    background-color: #F8FAFC;
+    color: #0F172A;
+  }
+
+  *:focus-visible {
+    outline: 3px solid #0284C7;
+    outline-offset: 2px;
+  }
+}
+
+/* ── Large Text Accessibility Mode ─────────────────────────────────────────── */
+html.large-text,
+html[data-large-text="true"] {
+  font-size: 112.5%;
+}
+
+/* ── High-Contrast Accessibility Mode ──────────────────────────────────────── */
+html.high-contrast,
+html[data-high-contrast="true"] {
+  background-color: #FFFFFF;
+  color: #000000;
+}
+
+html.high-contrast body,
+html[data-high-contrast="true"] body,
+html.high-contrast .bg-canvas,
+html[data-high-contrast="true"] .bg-canvas,
+html.high-contrast .bg-surface,
+html[data-high-contrast="true"] .bg-surface,
+html.high-contrast .bg-white\/70,
+html[data-high-contrast="true"] .bg-white\/70 {
+  background-color: #FFFFFF;
+  color: #000000;
+}
+
+html.high-contrast .text-ink-primary,
+html[data-high-contrast="true"] .text-ink-primary,
+html.high-contrast .text-ink-secondary,
+html[data-high-contrast="true"] .text-ink-secondary,
+html.high-contrast .text-ink-muted,
+html[data-high-contrast="true"] .text-ink-muted,
+html.high-contrast .text-slate-400,
+html[data-high-contrast="true"] .text-slate-400,
+html.high-contrast .text-slate-500,
+html[data-high-contrast="true"] .text-slate-500,
+html.high-contrast .text-slate-600,
+html[data-high-contrast="true"] .text-slate-600,
+html.high-contrast .text-slate-700,
+html[data-high-contrast="true"] .text-slate-700 {
+  color: #000000;
+}
+
+html.high-contrast .bg-brand-teal,
+html[data-high-contrast="true"] .bg-brand-teal {
+  background-color: #042F2E;
+  color: #FFFFFF;
+}
+
+html.high-contrast .bg-taken,
+html[data-high-contrast="true"] .bg-taken {
+  background-color: #052E16;
+  color: #FFFFFF;
+}
+
+html.high-contrast .bg-alert,
+html[data-high-contrast="true"] .bg-alert {
+  background-color: #7F1D1D;
+  color: #FFFFFF;
+}
+
+html.high-contrast .bg-ink-primary,
+html[data-high-contrast="true"] .bg-ink-primary {
+  background-color: #000000;
+  color: #FFFFFF;
+}
+
+html.high-contrast .text-brand-teal,
+html[data-high-contrast="true"] .text-brand-teal,
+html.high-contrast .text-brand-teal-dark,
+html[data-high-contrast="true"] .text-brand-teal-dark {
+  color: #042F2E;
+}
+
+html.high-contrast .text-taken,
+html[data-high-contrast="true"] .text-taken,
+html.high-contrast .text-emerald-600,
+html[data-high-contrast="true"] .text-emerald-600,
+html.high-contrast .text-emerald-700,
+html[data-high-contrast="true"] .text-emerald-700,
+html.high-contrast .text-emerald-800,
+html[data-high-contrast="true"] .text-emerald-800 {
+  color: #052E16;
+}
+
+html.high-contrast .text-pending,
+html[data-high-contrast="true"] .text-pending,
+html.high-contrast .text-due,
+html[data-high-contrast="true"] .text-due,
+html.high-contrast .text-sky-600,
+html[data-high-contrast="true"] .text-sky-600,
+html.high-contrast .text-sky-700,
+html[data-high-contrast="true"] .text-sky-700,
+html.high-contrast .text-blue-800,
+html[data-high-contrast="true"] .text-blue-800 {
+  color: #0C4A6E;
+}
+
+html.high-contrast .text-snooze,
+html[data-high-contrast="true"] .text-snooze,
+html.high-contrast .text-snooze-text,
+html[data-high-contrast="true"] .text-snooze-text,
+html.high-contrast .text-yellow-800,
+html[data-high-contrast="true"] .text-yellow-800,
+html.high-contrast .text-orange-800,
+html[data-high-contrast="true"] .text-orange-800 {
+  color: #78350F;
+}
+
+html.high-contrast .text-alert,
+html[data-high-contrast="true"] .text-alert,
+html.high-contrast .text-red-800,
+html[data-high-contrast="true"] .text-red-800 {
+  color: #7F1D1D;
+}
+
+html.high-contrast .bg-slate-50,
+html[data-high-contrast="true"] .bg-slate-50,
+html.high-contrast .bg-slate-100,
+html[data-high-contrast="true"] .bg-slate-100,
+html.high-contrast .bg-slate-200,
+html[data-high-contrast="true"] .bg-slate-200 {
+  background-color: #E2E8F0;
+  color: #000000;
+}
+
+html.high-contrast .border-slate-100,
+html[data-high-contrast="true"] .border-slate-100,
+html.high-contrast .border-slate-200,
+html[data-high-contrast="true"] .border-slate-200,
+html.high-contrast .border-slate-300,
+html[data-high-contrast="true"] .border-slate-300,
+html.high-contrast .border-emerald-200,
+html[data-high-contrast="true"] .border-emerald-200,
+html.high-contrast .border-sky-200,
+html[data-high-contrast="true"] .border-sky-200,
+html.high-contrast .border-red-200,
+html[data-high-contrast="true"] .border-red-200 {
+  border-color: #0F172A;
+}
+
+html.high-contrast .border-snooze,
+html[data-high-contrast="true"] .border-snooze {
+  border-color: #78350F;
+}
+
+html.high-contrast .border-alert,
+html[data-high-contrast="true"] .border-alert,
+html.high-contrast .border-alert-chip,
+html[data-high-contrast="true"] .border-alert-chip {
+  border-color: #7F1D1D;
+}
+
+html.high-contrast .border-brand-teal,
+html[data-high-contrast="true"] .border-brand-teal {
+  border-color: #042F2E;
+}
+
+html.high-contrast #dose-instructions,
+html[data-high-contrast="true"] #dose-instructions,
+html.high-contrast .rounded-card,
+html[data-high-contrast="true"] .rounded-card {
+  border-width: 2px;
+  border-color: #0F172A;
+}
+
+html.high-contrast header.bg-brand-teal button,
+html[data-high-contrast="true"] header.bg-brand-teal button,
+html.high-contrast header.bg-brand-teal a,
+html[data-high-contrast="true"] header.bg-brand-teal a {
+  border: 1px solid #FFFFFF;
+}
+
+html.high-contrast *:focus-visible,
+html[data-high-contrast="true"] *:focus-visible {
+  outline: 4px solid #000000;
+  outline-offset: 2px;
+}
+
+html.high-contrast header.bg-brand-teal *:focus-visible,
+html[data-high-contrast="true"] header.bg-brand-teal *:focus-visible {
+  outline: 3px solid #FFFFFF;
+  outline-offset: 2px;
+}
