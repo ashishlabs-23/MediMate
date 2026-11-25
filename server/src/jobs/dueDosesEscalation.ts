@@ -242,7 +242,7 @@ async function sendFCMAlert(
       if (circleSnap.exists) {
         const circleData = circleSnap.data() as { caregiverIds?: unknown };
         const caregiverIds = Array.isArray(circleData?.caregiverIds)
-          ? circleData.caregiverIds.filter((id): id is string => typeof id === 'string')
+          ? circleData.caregiverIds.filter((id: unknown): id is string => typeof id === 'string')
           : [];
         for (const cgId of caregiverIds) {
           const cgSnap = await db.collection('users').doc(cgId).get();
@@ -312,7 +312,7 @@ async function sendFCMAlert(
       const response = await messaging.sendEachForMulticast(message);
       totalSuccessCount += response.successCount;
 
-      response.responses.forEach((resp, idx) => {
+      response.responses.forEach((resp: admin.messaging.SendResponse, idx: number) => {
         if (!resp.success) {
           totalFailedCount += 1;
           const errorCode = resp.error?.code;
