@@ -5,6 +5,7 @@
 
 import {
   Timestamp,
+  arrayUnion,
   collection,
   doc,
   getDoc,
@@ -166,49 +167,62 @@ export async function redeemCareInviteCode(
   }
 
   const circleRef = doc(collection(db, 'care_circles'), patientId);
-  const circleSnap = await getDoc(circleRef);
-  if (!circleSnap.exists()) {
-    throw new Error('Patient care circle not found.');
+  let circle: CareCircleDocument | null = null;
+  try {
+    const circleSnap = await getDoc(circleRef);
+    if (circleSnap.exists()) {
+      circle = circleSnap.data() as CareCircleDocument;
+      const existingCaregivers = Array.isArray(circle.caregiverIds)
+        ? circle.caregiverIds.map(String)
+        : [];
+      if (existingCaregivers.includes(caregiver.uid)) {
+        return { ...circle, id: circleSnap.id };
+      }
+    }
+  } catch {
+    // If getDoc is rejected by security rules because the caregiver is not yet in caregiverIds,
+    // proceed directly to updateDoc with atomic arrayUnion which satisfies isValidCaregiverSelfJoin().
   }
 
-  const circle = circleSnap.data() as CareCircleDocument;
-  const existingCaregivers = Array.isArray(circle.caregiverIds)
-    ? circle.caregiverIds.map(String)
-    : [];
-
-  if (existingCaregivers.includes(caregiver.uid)) {
-    return { ...circle, id: circleSnap.id };
-  }
-
-  const existingMembers = Array.isArray(circle.members) ? circle.members : [];
   const now = Timestamp.now();
   const newMember: CareCircleMember = {
     userId: caregiver.uid,
     displayName: caregiver.displayName || 'Caregiver',
     email: caregiver.email || '',
-    role: existingCaregivers.length === 0 ? 'primary' : 'secondary',
+    role: circle && Array.isArray(circle.caregiverIds) && circle.caregiverIds.length === 0 ? 'primary' : 'secondary',
     permissions: ['read', 'write_schedule', 'receive_alerts'],
     status: 'active',
     invitedAt: now,
     joinedAt: now,
   };
 
-  const updatedCaregivers = [...existingCaregivers, caregiver.uid];
-  const updatedMembers = [...existingMembers, newMember];
+  if (circle) {
+    const existingCaregivers = Array.isArray(circle.caregiverIds) ? circle.caregiverIds.map(String) : [];
+    const existingMembers = Array.isArray(circle.members) ? circle.members : [];
+    await updateDoc(circleRef, {
+      caregiverIds: [...existingCaregivers, caregiver.uid],
+      members: [...existingMembers, newMember],
+      lastRedeemedInviteCode: normalized,
+      updatedAt: serverTimestamp(),
+    });
+  } else {
+    await updateDoc(circleRef, {
+      caregiverIds: arrayUnion(caregiver.uid),
+      members: arrayUnion(newMember),
+      lastRedeemedInviteCode: normalized,
+      updatedAt: serverTimestamp(),
+    });
+  }
 
-  await updateDoc(circleRef, {
-    caregiverIds: updatedCaregivers,
-    members: updatedMembers,
-    lastRedeemedInviteCode: normalized,
-    updatedAt: serverTimestamp(),
-  });
+  // Once updated, the caregiver is authenticated and officially listed in caregiverIds,
+  // granting full read permissions under firestore.rules.
+  const finalSnap = await getDoc(circleRef);
+  if (!finalSnap.exists()) {
+    throw new Error('Patient care circle not found.');
+  }
 
   return {
-    ...circle,
-    id: circleSnap.id,
-    caregiverIds: updatedCaregivers,
-    members: updatedMembers,
-    lastRedeemedInviteCode: normalized,
-    updatedAt: now,
+    ...(finalSnap.data() as CareCircleDocument),
+    id: finalSnap.id,
   };
 }

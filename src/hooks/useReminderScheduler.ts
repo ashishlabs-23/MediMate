@@ -208,6 +208,14 @@ export function useReminderScheduler(
                 return;
               }
 
+              // Respect active snooze: if currently in an active snooze window, do not escalate
+              if (fresh.status === 'snoozed' && fresh.snoozeUntil) {
+                const snoozeExpiresMs = fresh.snoozeUntil.toMillis();
+                if (Date.now() < snoozeExpiresMs) {
+                  return;
+                }
+              }
+
               showNotification(
                 `🚨 URGENT: ${dose.medicationName} not taken`,
                 `${dose.dosage} has not been confirmed. Escalating to your caregiver.`,
