@@ -34,6 +34,23 @@ export function createApp(options: CreateAppOptions = {}): express.Application {
   app.use(cors());
   app.use(express.json());
 
+  app.get('/', (_req: Request, res: Response) => {
+    res.status(200).json({
+      name: 'MediMate Automation Backend',
+      status: 'operational',
+      uptime: process.uptime(),
+      jobsActive,
+      firebaseInitialized: adminContext.isInitialized,
+      healthCheck: '/health',
+      endpoints: [
+        '/health',
+        '/api/jobs/generate-daily-logs',
+        '/api/jobs/check-due-doses'
+      ],
+      documentation: 'https://github.com/ashishlabs-23/MediMate'
+    });
+  });
+
   app.get('/health', (_req: Request, res: Response) => {
     res.status(200).json({
       status: 'ok',
