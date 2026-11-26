@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   AlertCircle,
-  ArrowRight,
   BellRing,
   CalendarClock,
   CheckCircle2,
@@ -42,13 +41,6 @@ function renderFeatureIcon(featureId: string) {
   }
 }
 
-/** Map worry card ID to an emoji/icon for visual warmth */
-const WORRY_CARD_EMOJI: Record<string, string> = {
-  'multiple-schedules': '🗓️',
-  'memory-uncertainty': '🤔',
-  'caregiver-checkin': '📞',
-};
-
 export function LandingSections() {
   const [openFaqId, setOpenFaqId] = useState<string | null>(null);
 
@@ -87,12 +79,6 @@ export function LandingSections() {
                 key={card.id}
                 className="rounded-card bg-canvas border border-slate-200 p-6 shadow-sm"
               >
-                <div
-                  className="text-3xl mb-4 leading-none select-none"
-                  aria-hidden="true"
-                >
-                  {WORRY_CARD_EMOJI[card.id] ?? '💊'}
-                </div>
                 <h3 className="text-lg font-bold text-ink-primary">{card.title}</h3>
                 <p className="text-base text-ink-secondary mt-2.5 leading-relaxed">
                   {card.description}
@@ -128,8 +114,7 @@ export function LandingSections() {
                 key={step.stepNumber}
                 className="rounded-card bg-surface border border-slate-200 p-6 shadow-sm flex flex-col"
               >
-                {/* Larger colored step circle */}
-                <span className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-brand-teal text-white font-extrabold text-2xl mb-5 shadow-sm">
+                <span className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-brand-teal-light text-brand-teal-dark font-extrabold text-base mb-4">
                   {step.stepNumber}
                 </span>
                 <h3 className="text-lg font-bold text-ink-primary">{step.title}</h3>
@@ -373,9 +358,9 @@ export function LandingSections() {
             {CORE_FEATURES.map((feature) => (
               <article
                 key={feature.id}
-                className="rounded-card bg-surface border border-slate-200 p-6 shadow-sm hover:shadow-md hover:border-brand-teal/40 transition-all duration-150"
+                className="rounded-card bg-surface border border-slate-200 p-6 shadow-sm"
               >
-                <div className="w-12 h-12 rounded-2xl bg-brand-teal-light/60 flex items-center justify-center mb-4">
+                <div className="w-11 h-11 rounded-xl bg-brand-teal-light/60 flex items-center justify-center mb-4">
                   {renderFeatureIcon(feature.id)}
                 </div>
                 <h3 className="text-lg font-bold text-ink-primary">{feature.title}</h3>
@@ -517,52 +502,6 @@ export function LandingSections() {
                 </div>
               );
             })}
-          </div>
-        </div>
-      </section>
-
-      {/* Final CTA section — dark teal background */}
-      <section
-        aria-labelledby="final-cta-heading"
-        className="py-16 sm:py-20 bg-teal-900"
-      >
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-6">
-          <h2
-            id="final-cta-heading"
-            className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight leading-tight"
-          >
-            Ready to bring calm to your family&rsquo;s medicine routine?
-          </h2>
-          <p className="text-lg text-teal-200 max-w-xl mx-auto leading-relaxed">
-            Join families who use MediMate to stay on top of daily schedules—with no apps to download
-            and no calls to make.
-          </p>
-          <Link
-            to="/login"
-            className="inline-flex items-center justify-center min-h-[44px] min-w-[44px] px-8 py-3.5 rounded-btn bg-white text-teal-900 text-base font-bold hover:bg-teal-50 transition-colors shadow-lg"
-          >
-            Get Started Free
-          </Link>
-        </div>
-      </section>
-
-      {/* Final Call to Action Section */}
-      <section className="py-16 sm:py-20 bg-gradient-to-tr from-brand-teal via-teal-800 to-teal-900 text-white text-center">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
-          <h2 className="text-3xl sm:text-4xl font-extrabold tracking-tight">
-            Ready to bring calm to your family&rsquo;s medicine routine?
-          </h2>
-          <p className="text-lg text-teal-100 max-w-2xl mx-auto leading-relaxed">
-            Get started in seconds. One-tap simplicity for older adults, complete reassurance for caregivers.
-          </p>
-          <div className="pt-2">
-            <Link
-              to="/login"
-              className="inline-flex items-center justify-center gap-2.5 min-h-[52px] min-w-[44px] px-8 py-3.5 rounded-xl bg-white text-brand-teal text-base font-bold hover:bg-teal-50 active:scale-[0.98] transition-all shadow-xl shadow-brand-teal/40"
-            >
-              <span>Get Started</span>
-              <ArrowRight className="w-4 h-4" aria-hidden="true" />
-            </Link>
           </div>
         </div>
       </section>
