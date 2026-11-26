@@ -51,7 +51,11 @@ vi.mock('../../src/components/layout/AppShell', () => ({
   ),
 }));
 
-function makeAuthValue(options: { uid: string; isDemo: boolean }): AuthContextValue {
+function makeAuthValue(options: {
+  uid: string;
+  isDemo: boolean;
+  nullFirebaseUser?: boolean;
+}): AuthContextValue {
   const ts = Timestamp.fromDate(new Date(2026, 10, 25, 0, 0, 0));
   const userProfile: UserDocument = {
     uid: options.uid,
@@ -71,7 +75,7 @@ function makeAuthValue(options: { uid: string; isDemo: boolean }): AuthContextVa
   };
 
   return {
-    firebaseUser: { uid: options.uid } as unknown as User,
+    firebaseUser: options.nullFirebaseUser ? null : ({ uid: options.uid } as unknown as User),
     userProfile,
     isLoading: false,
     isDemo: options.isDemo,
@@ -198,5 +202,152 @@ describe('TodayView — R2-FE Trial / Demo Isolation', () => {
     expect(mockGenerateTodayLogs).toHaveBeenCalledWith('real_patient_uid');
     expect(mockSubscribeToDoseLogs).toHaveBeenCalledTimes(1);
     expect(mockSubscribeToDoseLogs.mock.calls[0][0]).toBe('real_patient_uid');
+  });
+
+  it('RACE A2: tapping Taken ✓ during TodayView 5s undo window while T+30m getDoseLog is in-flight prevents escalation overwrite', async () => {
+    vi.setSystemTime(new Date(2026, 10, 25, 8, 29, 0, 0));
+
+    let emitSnapshot: SnapshotCallback | null = null;
+    mockSubscribeToDoseLogs.mockImplementation((_pid, _date, cb) => {
+      emitSnapshot = cb;
+      return vi.fn();
+    });
+
+    let resolveGetDose!: (doc: DoseLogDocument | null) => void;
+    mockGetDoseLog.mockImplementation(
+      () =>
+        new Promise<DoseLogDocument | null>((resolve) => {
+          resolveGetDose = resolve;
+        })
+    );
+
+    const ts = Timestamp.fromDate(new Date(2026, 10, 25, 8, 0, 0, 0));
+    const dose: DoseLogDocument = {
+      id: 'dose-tv-race',
+      patientId: 'real_patient_uid',
+      medicationId: 'med-1',
+      medicationName: 'Metformin',
+      dosage: '500mg',
+      instructions: 'Take after breakfast',
+      color: '#0D9488',
+      shape: 'round',
+      scheduledDate: '2026-11-25',
+      scheduledTime: ts,
+      status: 'due',
+      snoozeCount: 0,
+      followUpSent: true,
+      escalationAlertSent: false,
+      createdAt: ts,
+      updatedAt: ts,
+    };
+
+    render(
+      <AuthProvider value={makeAuthValue({ uid: 'real_patient_uid', isDemo: false })}>
+        <TodayView />
+      </AuthProvider>
+    );
+
+    act(() => {
+      emitSnapshot?.([dose]);
+    });
+
+    // Advance 60s to 08:30 so T+30m fires and awaits getDoseLog
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(mockGetDoseLog).toHaveBeenCalledWith('dose-tv-race');
+
+    // User taps Taken ✓ while getDoseLog is still in-flight (starts 5s undo window; Firestore untouched)
+    act(() => {
+      fireEvent.click(document.getElementById('taken-button') as HTMLButtonElement);
+    });
+
+    // Stale getDoseLog resolves with status: 'due'
+    await act(async () => {
+      resolveGetDose(dose);
+      await Promise.resolve();
+    });
+
+    // Scheduler must NOT write { status: 'unconfirmed' }
+    expect(mockUpdateDoseLog).not.toHaveBeenCalledWith('dose-tv-race', {
+      status: 'unconfirmed',
+    });
+
+    // Let 5s undo window finish -> only { status: 'taken' } commits
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(mockUpdateDoseLog).toHaveBeenCalledTimes(1);
+    expect(mockUpdateDoseLog).toHaveBeenCalledWith(
+      'dose-tv-race',
+      expect.objectContaining({ status: 'taken' })
+    );
+  });
+
+  it('runs local scheduler timers in isDemo: true even when firebaseUser is null with ZERO Firestore calls', async () => {
+    render(
+      <AuthProvider
+        value={makeAuthValue({ uid: 'patient_ramesh', isDemo: true, nullFirebaseUser: true })}
+      >
+        <TodayView />
+      </AuthProvider>
+    );
+
+    expect(document.getElementById('dose-medication-name')).toHaveTextContent('Metformin');
+    expect(document.getElementById('snooze-button')).not.toBeDisabled();
+
+    // Advance 25m from 08:05 -> 08:30
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(25 * 60_000);
+    });
+
+    expect(document.getElementById('snooze-button')).toBeDisabled();
+    expect(mockGenerateTodayLogs).not.toHaveBeenCalled();
+    expect(mockSubscribeToDoseLogs).not.toHaveBeenCalled();
+    expect(mockGetDoseLog).not.toHaveBeenCalled();
+    expect(mockUpdateDoseLog).not.toHaveBeenCalled();
+  });
+
+  it('escalates Undo past T+30m in active session while keeping initial late-hour demo Metformin snoozable', async () => {
+    // (a) Active demo session crossing 08:30: Taken at 08:29:58, Undo at 08:30:01 -> escalates to unconfirmed
+    vi.setSystemTime(new Date(2026, 10, 25, 8, 29, 58, 0));
+    const { unmount } = render(
+      <AuthProvider value={makeAuthValue({ uid: 'patient_ramesh', isDemo: true })}>
+        <TodayView />
+      </AuthProvider>
+    );
+
+    act(() => {
+      fireEvent.click(document.getElementById('taken-button') as HTMLButtonElement);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    await act(async () => {
+      fireEvent.click(document.getElementById('undo-toast-button') as HTMLButtonElement);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(document.getElementById('dose-medication-name')).toHaveTextContent('Metformin');
+    expect(document.getElementById('snooze-button')).toBeDisabled();
+    unmount();
+
+    // (b) Initial late-hour demo mount at 14:00 keeps seeded Metformin snoozable
+    vi.setSystemTime(new Date(2026, 10, 25, 14, 0, 0, 0));
+    render(
+      <AuthProvider value={makeAuthValue({ uid: 'patient_ramesh', isDemo: true })}>
+        <TodayView />
+      </AuthProvider>
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(document.getElementById('dose-medication-name')).toHaveTextContent('Metformin');
+    expect(document.getElementById('snooze-button')).not.toBeDisabled();
+    expect(mockUpdateDoseLog).not.toHaveBeenCalled();
   });
 });

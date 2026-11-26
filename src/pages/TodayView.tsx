@@ -91,6 +91,7 @@ export function TodayView() {
       (patientId === 'patient_ramesh' ||
         patientId === 'caregiver_priya' ||
         patientId.startsWith('demo_')));
+  const effectivePatientId = patientId || (isDemoSession ? 'patient_ramesh' : '');
 
   const commitDoseUpdate = useCallback(
     (doseId: string, patch: DoseUpdatePatch) => {
@@ -157,7 +158,7 @@ export function TodayView() {
     []
   );
 
-  useReminderScheduler(doses, patientId, {
+  useReminderScheduler(doses, effectivePatientId, {
     isDemoSession,
     onDemoDoseUpdate: handleDemoSchedulerUpdate,
   });
@@ -245,7 +246,7 @@ export function TodayView() {
       const patch: DoseUpdatePatch = {
         status: result.nextStatus as DoseStatus,
         takenAt,
-        takenBy: patientId,
+        takenBy: effectivePatientId,
         snoozeUntil: null,
       };
       const optimisticDose: DoseLogDocument = {
@@ -285,7 +286,7 @@ export function TodayView() {
       pendingUndoRef.current = entry;
       setPendingUndo(entry);
     },
-    [commitDoseUpdate, doses, flushPendingUndo, patientId, userProfile?.accessibilityPreferences?.soundEnabled]
+    [commitDoseUpdate, doses, effectivePatientId, flushPendingUndo, userProfile?.accessibilityPreferences?.soundEnabled]
   );
 
   const handleUndo = useCallback(() => {

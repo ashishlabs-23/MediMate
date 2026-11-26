@@ -15,9 +15,9 @@ import type { AccessibilityPreferences, DoseLogDocument, UserRole } from '@/type
 const mockDb = new MockFirestoreDb();
 let currentActor = { uid: 'dual_nirmala', role: 'dual' as UserRole };
 const bridge = createMockFirestoreAdapter(mockDb, () => currentActor);
-const updateUserAccessibilityPreferencesSpy = vi.fn(
-  async (_uid: string, _prefs: AccessibilityPreferences) => {}
-);
+const updateUserAccessibilityPreferencesSpy = vi.fn<
+  (uid: string, prefs: AccessibilityPreferences) => Promise<void>
+>(async () => {});
 
 vi.mock('@/hooks/useAuth', () => ({
   useAuth: vi.fn(),

@@ -85,6 +85,12 @@ export function useReminderScheduler(
   const onDemoDoseUpdateRef = useRef<UseReminderSchedulerOptions['onDemoDoseUpdate']>(
     options?.onDemoDoseUpdate
   );
+  // Tracks doses observed before their T+30m boundary so demo Undo past T+30m escalates
+  // while initial late-hour demo mounts keep seeded Metformin snoozable.
+  const sawFutureEscalationRef = useRef<Set<string>>(new Set());
+  // Preserves post-snooze gentle timestamp across snooze-expiry re-renders when snoozedAt is absent.
+  const postSnoozeGentleTargetRef = useRef<Map<string, number>>(new Map());
+  const prevPatientIdRef = useRef<string>(patientId);
 
   useEffect(() => {
     dosesRef.current = doses;
@@ -97,8 +103,14 @@ export function useReminderScheduler(
 
   useEffect(() => {
     const activeTimerMap = timerMap.current;
+    if (prevPatientIdRef.current !== patientId) {
+      prevPatientIdRef.current = patientId;
+      sawFutureEscalationRef.current.clear();
+      postSnoozeGentleTargetRef.current.clear();
+    }
     dosesRef.current = doses;
     isDemoSessionRef.current = isDemoSession;
+    let cancelled = false;
 
     // Clear all existing timers before re-scheduling or when doses become empty
     for (const timers of activeTimerMap.values()) {
@@ -107,7 +119,11 @@ export function useReminderScheduler(
     activeTimerMap.clear();
 
     // Don't schedule if no doses or no patientId
-    if (!patientId || doses.length === 0) return;
+    if (!patientId || doses.length === 0) {
+      return () => {
+        cancelled = true;
+      };
+    }
 
     // Request notification permission on first dose load
     void ensureNotificationPermission();
@@ -120,6 +136,7 @@ export function useReminderScheduler(
     };
 
     const writeDosePatch = (doseId: string, patch: DoseSchedulerPatch): void => {
+      if (cancelled) return;
       if (isDemoSessionRef.current) {
         onDemoDoseUpdateRef.current?.(doseId, patch);
         return;
@@ -131,17 +148,39 @@ export function useReminderScheduler(
 
     for (const dose of doses) {
       // Skip terminal states
-      if (dose.status === 'taken' || dose.status === 'missed') continue;
+      if (dose.status === 'taken' || dose.status === 'missed') {
+        postSnoozeGentleTargetRef.current.delete(dose.id);
+        continue;
+      }
 
       const scheduledMs = dose.scheduledTime.toMillis();
       const escalationMs = scheduledMs + ESCALATION_OFFSET_MS;
+      if (now < escalationMs) {
+        sawFutureEscalationRef.current.add(dose.id);
+      }
+      const allowPastEscalationCatchup =
+        !isDemoSession || sawFutureEscalationRef.current.has(dose.id);
       const timers: ReturnType<typeof setTimeout>[] = [];
 
       // ── T+0  Initial "due" notification ───────────────────────────────────
       const dueDelay = scheduledMs - now;
       if (dueDelay > 0 && dose.status === 'scheduled') {
         timers.push(
-          setTimeout(() => {
+          setTimeout(async () => {
+            if (cancelled) return;
+            const fresh = await readLatestDose(dose.id);
+            if (cancelled || !fresh) return;
+            const localDose = dosesRef.current.find((d) => d.id === dose.id);
+            if (localDose && (localDose.status === 'taken' || localDose.status === 'missed')) {
+              return;
+            }
+            if (
+              fresh.status !== 'scheduled' ||
+              localDose?.status !== 'scheduled' ||
+              Date.now() >= escalationMs
+            ) {
+              return;
+            }
             showNotification(
               `💊 Time for ${dose.medicationName}`,
               `${dose.dosage} — please take now.`,
@@ -150,22 +189,57 @@ export function useReminderScheduler(
             writeDosePatch(dose.id, { status: 'due' });
           }, dueDelay)
         );
-      } else if (dose.status === 'scheduled' && dueDelay <= 0) {
-        // Already past due time but not yet marked — fix it immediately
+      } else if (
+        dose.status === 'scheduled' &&
+        dueDelay <= 0 &&
+        (now < escalationMs || !allowPastEscalationCatchup)
+      ) {
+        // Already past due time (before escalation ceiling, or late-hour demo mount) — mark due immediately
         writeDosePatch(dose.id, { status: 'due' });
       }
 
-      // ── T+15m  Gentle follow-up reminder ─────────────────────────────────
+      // ── T+15m / Post-Snooze  Gentle follow-up reminder ────────────────────
+      if (dose.status === 'snoozed' && dose.snoozeUntil && !dose.snoozedAt) {
+        postSnoozeGentleTargetRef.current.set(
+          dose.id,
+          dose.snoozeUntil.toMillis() + SNOOZE_DURATION_MS
+        );
+      }
+      if (dose.followUpSent || dose.status === 'unconfirmed') {
+        postSnoozeGentleTargetRef.current.delete(dose.id);
+      }
+
       if (!dose.followUpSent && dose.status !== 'unconfirmed') {
-        const gentleMs = scheduledMs + GENTLE_REMINDER_OFFSET_MS;
+        const baseGentleMs = scheduledMs + GENTLE_REMINDER_OFFSET_MS;
+        let postSnoozeMs = 0;
+        if (dose.snoozeUntil) {
+          postSnoozeMs = dose.snoozeUntil.toMillis() + SNOOZE_DURATION_MS;
+        } else if (dose.snoozedAt) {
+          postSnoozeMs = dose.snoozedAt.toMillis() + 2 * SNOOZE_DURATION_MS;
+        } else if (dose.snoozeCount > 0) {
+          postSnoozeMs = postSnoozeGentleTargetRef.current.get(dose.id) ?? 0;
+        }
+
+        const gentleMs = Math.max(baseGentleMs, postSnoozeMs);
         const gentleDelay = gentleMs - now;
-        if (gentleDelay > 0) {
+        if (gentleDelay > 0 && gentleMs < escalationMs) {
           timers.push(
             setTimeout(async () => {
+              if (cancelled) return;
               // Re-check: skip if user already took the dose or already escalated
               const fresh = await readLatestDose(dose.id);
+              if (cancelled || !fresh) return;
+              const localDose = dosesRef.current.find((d) => d.id === dose.id);
               if (
-                !fresh ||
+                localDose &&
+                (localDose.status === 'taken' ||
+                  localDose.status === 'missed' ||
+                  localDose.status === 'unconfirmed' ||
+                  localDose.followUpSent)
+              ) {
+                return;
+              }
+              if (
                 fresh.status === 'taken' ||
                 fresh.status === 'missed' ||
                 fresh.status === 'unconfirmed' ||
@@ -178,6 +252,10 @@ export function useReminderScheduler(
               if (fresh.status === 'snoozed' && fresh.snoozeUntil) {
                 const snoozeExpiresMs = fresh.snoozeUntil.toMillis();
                 if (Date.now() < snoozeExpiresMs) return; // Still in snooze window
+              }
+              if (localDose?.status === 'snoozed' && localDose.snoozeUntil) {
+                const localSnoozeExpiresMs = localDose.snoozeUntil.toMillis();
+                if (Date.now() < localSnoozeExpiresMs) return;
               }
 
               showNotification(
@@ -193,37 +271,56 @@ export function useReminderScheduler(
 
       // ── T+30m  Escalation (sets status: 'unconfirmed' ONLY; backend sends FCM & sets escalationAlertSent) ──
       if (!dose.escalationAlertSent && dose.status !== 'unconfirmed') {
+        const runEscalationCheck = async () => {
+          if (cancelled) return;
+          const fresh = await readLatestDose(dose.id);
+          if (cancelled || !fresh) return;
+          const localDose = dosesRef.current.find((d) => d.id === dose.id);
+          if (
+            localDose &&
+            (localDose.status === 'taken' ||
+              localDose.status === 'missed' ||
+              localDose.status === 'unconfirmed' ||
+              localDose.escalationAlertSent)
+          ) {
+            return;
+          }
+          if (
+            fresh.status === 'taken' ||
+            fresh.status === 'missed' ||
+            fresh.status === 'unconfirmed' ||
+            fresh.escalationAlertSent
+          ) {
+            return;
+          }
+
+          // Respect active snooze: if currently in an active snooze window, do not escalate
+          if (fresh.status === 'snoozed' && fresh.snoozeUntil) {
+            const snoozeExpiresMs = fresh.snoozeUntil.toMillis();
+            if (Date.now() < snoozeExpiresMs) {
+              return;
+            }
+          }
+          if (localDose?.status === 'snoozed' && localDose.snoozeUntil) {
+            const localSnoozeExpiresMs = localDose.snoozeUntil.toMillis();
+            if (Date.now() < localSnoozeExpiresMs) {
+              return;
+            }
+          }
+
+          showNotification(
+            `🚨 URGENT: ${dose.medicationName} not taken`,
+            `${dose.dosage} has not been confirmed. Escalating to your caregiver.`,
+            `escalation-${dose.id}`
+          );
+          writeDosePatch(dose.id, { status: 'unconfirmed' });
+        };
+
         const escalationDelay = escalationMs - now;
         if (escalationDelay > 0) {
-          timers.push(
-            setTimeout(async () => {
-              const fresh = await readLatestDose(dose.id);
-              if (
-                !fresh ||
-                fresh.status === 'taken' ||
-                fresh.status === 'missed' ||
-                fresh.status === 'unconfirmed' ||
-                fresh.escalationAlertSent
-              ) {
-                return;
-              }
-
-              // Respect active snooze: if currently in an active snooze window, do not escalate
-              if (fresh.status === 'snoozed' && fresh.snoozeUntil) {
-                const snoozeExpiresMs = fresh.snoozeUntil.toMillis();
-                if (Date.now() < snoozeExpiresMs) {
-                  return;
-                }
-              }
-
-              showNotification(
-                `🚨 URGENT: ${dose.medicationName} not taken`,
-                `${dose.dosage} has not been confirmed. Escalating to your caregiver.`,
-                `escalation-${dose.id}`
-              );
-              writeDosePatch(dose.id, { status: 'unconfirmed' });
-            }, escalationDelay)
-          );
+          timers.push(setTimeout(() => void runEscalationCheck(), escalationDelay));
+        } else if (allowPastEscalationCatchup) {
+          void runEscalationCheck();
         }
       }
 
@@ -231,12 +328,25 @@ export function useReminderScheduler(
       if (dose.status === 'snoozed' && dose.snoozeUntil) {
         const snoozeExpiresMs = dose.snoozeUntil.toMillis();
         const snoozeExpiredDelay = snoozeExpiresMs - now;
-        // Also compute when snooze+10m post-snooze gentle reminder would fire
-        const postSnoozeGentleDelay = snoozeExpiresMs + SNOOZE_DURATION_MS - now;
 
         if (snoozeExpiredDelay > 0) {
           timers.push(
-            setTimeout(() => {
+            setTimeout(async () => {
+              if (cancelled) return;
+              const fresh = await readLatestDose(dose.id);
+              if (cancelled || !fresh) return;
+              const localDose = dosesRef.current.find((d) => d.id === dose.id);
+              if (localDose && (localDose.status === 'taken' || localDose.status === 'missed')) {
+                return;
+              }
+              if (
+                fresh.status !== 'snoozed' ||
+                localDose?.status !== 'snoozed' ||
+                Date.now() >= escalationMs
+              ) {
+                return;
+              }
+
               showNotification(
                 `💊 ${dose.medicationName} — Snooze ended`,
                 `${dose.dosage} — ready to take now.`,
@@ -247,25 +357,23 @@ export function useReminderScheduler(
           );
         } else if (now < escalationMs) {
           // Snooze expired while tab was inactive before T+30m escalation
-          writeDosePatch(dose.id, { status: 'due', snoozeUntil: null });
-        }
-
-        if (!dose.followUpSent && postSnoozeGentleDelay > 0 && snoozeExpiresMs + SNOOZE_DURATION_MS < escalationMs) {
-          timers.push(
-            setTimeout(async () => {
-              const fresh = await readLatestDose(dose.id);
-              if (
-                !fresh ||
-                fresh.status === 'taken' ||
-                fresh.status === 'missed' ||
-                fresh.status === 'unconfirmed' ||
-                fresh.followUpSent
-              ) {
-                return;
-              }
-              writeDosePatch(dose.id, { followUpSent: true });
-            }, postSnoozeGentleDelay)
-          );
+          void (async () => {
+            if (cancelled) return;
+            const fresh = await readLatestDose(dose.id);
+            if (cancelled || !fresh) return;
+            const localDose = dosesRef.current.find((d) => d.id === dose.id);
+            if (localDose && (localDose.status === 'taken' || localDose.status === 'missed')) {
+              return;
+            }
+            if (
+              fresh.status !== 'snoozed' ||
+              localDose?.status !== 'snoozed' ||
+              Date.now() >= escalationMs
+            ) {
+              return;
+            }
+            writeDosePatch(dose.id, { status: 'due', snoozeUntil: null });
+          })();
         }
       }
 
@@ -276,6 +384,7 @@ export function useReminderScheduler(
 
     // Cleanup: clear all timers when doses change or component unmounts
     return () => {
+      cancelled = true;
       for (const timers of activeTimerMap.values()) {
         timers.forEach(clearTimeout);
       }

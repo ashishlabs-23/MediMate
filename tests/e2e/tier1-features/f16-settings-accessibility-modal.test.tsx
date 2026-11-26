@@ -16,9 +16,9 @@ import type { AccessibilityPreferences, UserRole } from '@/types/firestore';
 const mockDb = new MockFirestoreDb();
 let currentActor = { uid: 'patient_ramesh', role: 'elderly' as UserRole };
 const bridge = createMockFirestoreAdapter(mockDb, () => currentActor);
-const updateUserAccessibilityPreferencesSpy = vi.fn(
-  async (_uid: string, _prefs: AccessibilityPreferences) => {}
-);
+const updateUserAccessibilityPreferencesSpy = vi.fn<
+  (uid: string, prefs: AccessibilityPreferences) => Promise<void>
+>(async () => {});
 
 vi.mock('@/lib/firebase', () => ({
   firebaseApp: {},

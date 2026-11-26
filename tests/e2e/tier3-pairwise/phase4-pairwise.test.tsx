@@ -19,9 +19,9 @@ const mockDb = new MockFirestoreDb();
 let currentActor = { uid: 'dual_nirmala', role: 'dual' as UserRole };
 const bridge = createMockFirestoreAdapter(mockDb, () => currentActor);
 
-const updateUserAccessibilityPreferencesSpy = vi.fn(
-  async (_uid: string, _prefs: AccessibilityPreferences) => {}
-);
+const updateUserAccessibilityPreferencesSpy = vi.fn<
+  (uid: string, prefs: AccessibilityPreferences) => Promise<void>
+>(async () => {});
 const inviteCareCircleMemberSpy = vi.fn(
   async (patientId: string, member: CareCircleMember) => {
     const existing = mockDb.inspectDoc<CareCircleDocument & FirestoreRecord>('care_circles', patientId);

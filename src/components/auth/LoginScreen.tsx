@@ -498,7 +498,7 @@ export function LoginScreen() {
             aria-checked={selectedRole === 'elderly'}
             disabled={isSubmitting}
             onClick={() => setSelectedRole('elderly')}
-            className={`py-2.5 px-3 text-xs sm:text-sm font-bold rounded-lg transition-all text-center min-h-[44px] flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed ${
+            className={`w-full py-2.5 px-3 text-xs sm:text-sm font-bold rounded-lg transition-all text-center min-h-[44px] flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed ${
               selectedRole === 'elderly'
                 ? 'bg-white text-teal-600 shadow-sm border border-slate-200'
                 : 'text-slate-500 hover:text-slate-700'
@@ -512,7 +512,7 @@ export function LoginScreen() {
             aria-checked={selectedRole === 'caregiver'}
             disabled={isSubmitting}
             onClick={() => setSelectedRole('caregiver')}
-            className={`py-2.5 px-3 text-xs sm:text-sm font-bold rounded-lg transition-all text-center min-h-[44px] flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed ${
+            className={`w-full py-2.5 px-3 text-xs sm:text-sm font-bold rounded-lg transition-all text-center min-h-[44px] flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed ${
               selectedRole === 'caregiver'
                 ? 'bg-white text-teal-600 shadow-sm border border-slate-200'
                 : 'text-slate-500 hover:text-slate-700'
@@ -741,7 +741,7 @@ export function LoginScreen() {
                 aria-selected={mode === 'signin'}
                 disabled={isSubmitting}
                 onClick={() => { if (submittingRef.current) return; setMode('signin'); setErrorMsg(null); setSuccessMsg(null); }}
-                className={`flex-1 min-h-[40px] rounded-lg text-sm font-bold transition-all flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed ${
+                className={`w-full flex-1 min-h-[44px] rounded-lg text-sm font-bold transition-all flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed ${
                   mode === 'signin'
                     ? 'bg-white text-teal-600 shadow-sm border border-slate-200'
                     : 'text-slate-500 hover:text-slate-700'
@@ -755,7 +755,7 @@ export function LoginScreen() {
                 aria-selected={mode === 'signup'}
                 disabled={isSubmitting}
                 onClick={() => { if (submittingRef.current) return; setMode('signup'); setErrorMsg(null); setSuccessMsg(null); }}
-                className={`flex-1 min-h-[40px] rounded-lg text-sm font-bold transition-all flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed ${
+                className={`w-full flex-1 min-h-[44px] rounded-lg text-sm font-bold transition-all flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed ${
                   mode === 'signup'
                     ? 'bg-white text-teal-600 shadow-sm border border-slate-200'
                     : 'text-slate-500 hover:text-slate-700'
@@ -933,7 +933,7 @@ export function LoginScreen() {
                   type="button"
                   disabled={isSubmitting}
                   onClick={() => handleDemoLogin('elderly')}
-                  className="min-h-[44px] py-2.5 px-3 rounded-xl border border-amber-200 bg-white text-slate-700 text-xs font-semibold hover:bg-amber-50 active:bg-amber-100 transition-colors flex items-center justify-center gap-1.5 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="w-full min-h-[44px] py-2.5 px-3 rounded-xl border border-amber-200 bg-white text-slate-700 text-xs font-semibold hover:bg-amber-50 active:bg-amber-100 transition-colors flex items-center justify-center gap-1.5 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   <span aria-hidden="true">👴</span>
                   <span>Try Older Adult Demo (Ramesh Sharma)</span>
@@ -942,7 +942,7 @@ export function LoginScreen() {
                   type="button"
                   disabled={isSubmitting}
                   onClick={() => handleDemoLogin('caregiver')}
-                  className="min-h-[44px] py-2.5 px-3 rounded-xl border border-amber-200 bg-white text-slate-700 text-xs font-semibold hover:bg-amber-50 active:bg-amber-100 transition-colors flex items-center justify-center gap-1.5 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="w-full min-h-[44px] py-2.5 px-3 rounded-xl border border-amber-200 bg-white text-slate-700 text-xs font-semibold hover:bg-amber-50 active:bg-amber-100 transition-colors flex items-center justify-center gap-1.5 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   <span aria-hidden="true">👩‍⚕️</span>
                   <span>Try Caregiver Demo (Priya Sharma)</span>

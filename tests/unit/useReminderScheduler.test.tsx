@@ -232,7 +232,9 @@ describe('useReminderScheduler — R1-FE & R2-FE', () => {
       followUpSent: false,
       escalationAlertSent: false,
     });
-    mockGetDoseLog.mockResolvedValue({ ...futureScheduled, status: 'due' });
+    mockGetDoseLog
+      .mockResolvedValueOnce(futureScheduled)
+      .mockResolvedValue({ ...futureScheduled, status: 'due' });
 
     const { unmount } = render(
       <SchedulerHarness doses={[futureScheduled]} patientId="patient-1" />
@@ -376,6 +378,221 @@ describe('useReminderScheduler — R1-FE & R2-FE', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60 * 60_000);
     });
+    expect(onDemoDoseUpdate).not.toHaveBeenCalled();
+  });
+
+  it('RACE A: aborts in-flight T+30m escalation when component unmounts or dose becomes taken before getDoseLog resolves', async () => {
+    let resolveDose!: (value: DoseLogDocument | null) => void;
+    const pendingRead = new Promise<DoseLogDocument | null>((resolve) => {
+      resolveDose = resolve;
+    });
+    mockGetDoseLog.mockReturnValueOnce(pendingRead);
+
+    const dueDose = makeDose({
+      id: 'dose-race-a',
+      status: 'due',
+      followUpSent: true,
+      escalationAlertSent: false,
+    });
+
+    const { rerender, unmount } = render(
+      <SchedulerHarness doses={[dueDose]} patientId="patient-1" />
+    );
+
+    // Advance to T+30m so getDoseLog is in-flight
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+    });
+    expect(mockGetDoseLog).toHaveBeenCalledTimes(1);
+
+    // Dose becomes taken and component unmounts before Firestore responds
+    rerender(
+      <SchedulerHarness doses={[{ ...dueDose, status: 'taken' }]} patientId="patient-1" />
+    );
+    unmount();
+
+    // Now stale 'due' resolves from Firestore
+    await act(async () => {
+      resolveDose(dueDose);
+      await Promise.resolve();
+    });
+
+    expect(mockUpdateDoseLog).not.toHaveBeenCalled();
+    expect(notifStub.calls.filter((c) => c.options?.tag === 'escalation-dose-race-a')).toHaveLength(
+      0
+    );
+  });
+
+  it('RACE B: dueDelay and snoozeExpiredDelay do not overwrite unconfirmed or terminal status past escalationMs', async () => {
+    // (a) snoozeExpiredDelay at 08:31 (> escalationMs 08:30) does not overwrite unconfirmed back to due
+    vi.setSystemTime(new Date(2026, 10, 25, 8, 21, 0, 0));
+    const snoozedPastEscalation = makeDose({
+      id: 'dose-race-b',
+      scheduledTime: Timestamp.fromDate(new Date(2026, 10, 25, 8, 0, 0, 0)),
+      status: 'snoozed',
+      snoozeCount: 1,
+      snoozedAt: Timestamp.fromDate(new Date(2026, 10, 25, 8, 21, 0, 0)),
+      snoozeUntil: Timestamp.fromDate(new Date(2026, 10, 25, 8, 31, 0, 0)),
+      followUpSent: true,
+      escalationAlertSent: false,
+    });
+    mockGetDoseLog.mockResolvedValue({ ...snoozedPastEscalation, status: 'unconfirmed' });
+
+    const { unmount } = render(
+      <SchedulerHarness doses={[snoozedPastEscalation]} patientId="patient-1" />
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(11 * 60_000);
+    });
+
+    expect(mockUpdateDoseLog).not.toHaveBeenCalledWith('dose-race-b', {
+      status: 'due',
+      snoozeUntil: null,
+    });
+    expect(
+      notifStub.calls.some((c) => c.options?.tag === 'snooze-expired-dose-race-b')
+    ).toBe(false);
+    unmount();
+
+    // (b) dueDelay skips write/notification if fresh Firestore dose is already taken
+    vi.setSystemTime(new Date(2026, 10, 25, 8, 0, 0, 0));
+    mockUpdateDoseLog.mockClear();
+    notifStub.calls.length = 0;
+
+    const scheduledDose = makeDose({
+      id: 'dose-due-race',
+      scheduledTime: Timestamp.fromDate(new Date(2026, 10, 25, 8, 5, 0, 0)),
+      status: 'scheduled',
+      followUpSent: true,
+      escalationAlertSent: false,
+    });
+    mockGetDoseLog.mockResolvedValue({ ...scheduledDose, status: 'taken' });
+
+    render(<SchedulerHarness doses={[scheduledDose]} patientId="patient-1" />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+    });
+
+    expect(mockUpdateDoseLog).not.toHaveBeenCalled();
+    expect(notifStub.calls.some((c) => c.options?.tag === 'due-dose-due-race')).toBe(false);
+  });
+
+  it('RACE C2: preserves post-snooze gentle reminder across snooze-expiry re-render', async () => {
+    vi.setSystemTime(new Date(2026, 10, 25, 8, 8, 0, 0));
+    const patches: Array<{ doseId: string; patch: DoseSchedulerPatch }> = [];
+
+    const initialSnoozed = makeDose({
+      id: 'dose-c2',
+      scheduledTime: Timestamp.fromDate(new Date(2026, 10, 25, 8, 0, 0, 0)),
+      status: 'snoozed',
+      snoozeCount: 1,
+      snoozedAt: Timestamp.fromDate(new Date(2026, 10, 25, 8, 8, 0, 0)),
+      snoozeUntil: Timestamp.fromDate(new Date(2026, 10, 25, 8, 18, 0, 0)),
+      followUpSent: false,
+      escalationAlertSent: false,
+    });
+
+    let currentDose = initialSnoozed;
+    const { rerender } = render(
+      <SchedulerHarness
+        doses={[currentDose]}
+        patientId="patient-1"
+        options={{
+          isDemoSession: true,
+          onDemoDoseUpdate: (doseId, patch) => {
+            patches.push({ doseId, patch });
+            currentDose = { ...currentDose, ...patch };
+          },
+        }}
+      />
+    );
+
+    // At 08:15 (T+15m), gentle is suppressed because snoozeUntil is 08:18
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(7 * 60_000);
+    });
+    expect(patches).toHaveLength(0);
+
+    // At 08:18, snooze expires -> { status: 'due', snoozeUntil: null } -> parent re-renders
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+    });
+    expect(patches).toEqual([{ doseId: 'dose-c2', patch: { status: 'due', snoozeUntil: null } }]);
+
+    rerender(
+      <SchedulerHarness
+        doses={[currentDose]}
+        patientId="patient-1"
+        options={{
+          isDemoSession: true,
+          onDemoDoseUpdate: (doseId, patch) => {
+            patches.push({ doseId, patch });
+            currentDose = { ...currentDose, ...patch };
+          },
+        }}
+      />
+    );
+
+    // At 08:28 (snoozedAt + 20m < 08:30 escalation), post-snooze gentle reminder fires
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+    });
+    expect(patches).toContainEqual({ doseId: 'dose-c2', patch: { followUpSent: true } });
+    expect(notifStub.calls.some((c) => c.options?.tag === 'gentle-dose-c2')).toBe(true);
+  });
+
+  it('EDGE D: late non-demo mount past T+30m escalates scheduled dose directly to unconfirmed without writing due; late demo mount preserves due', async () => {
+    // Non-demo late mount at 08:35 for 08:00 scheduled dose -> escalates directly to unconfirmed
+    vi.setSystemTime(new Date(2026, 10, 25, 8, 35, 0, 0));
+    const pastScheduled = makeDose({
+      id: 'dose-past-35',
+      scheduledTime: Timestamp.fromDate(new Date(2026, 10, 25, 8, 0, 0, 0)),
+      status: 'scheduled',
+      followUpSent: false,
+      escalationAlertSent: false,
+    });
+    mockGetDoseLog.mockResolvedValue(pastScheduled);
+
+    const { unmount } = render(<SchedulerHarness doses={[pastScheduled]} patientId="patient-1" />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockUpdateDoseLog).toHaveBeenCalledTimes(1);
+    expect(mockUpdateDoseLog).toHaveBeenCalledWith('dose-past-35', { status: 'unconfirmed' });
+    expect(mockUpdateDoseLog).not.toHaveBeenCalledWith('dose-past-35', { status: 'due' });
+    expect(notifStub.calls.some((c) => c.options?.tag === 'escalation-dose-past-35')).toBe(true);
+    unmount();
+
+    // Demo mode late-hour mount at 14:00 with 08:00 'due' Metformin does NOT retroactively escalate
+    vi.setSystemTime(new Date(2026, 10, 25, 14, 0, 0, 0));
+    const onDemoDoseUpdate = vi.fn<(doseId: string, patch: DoseSchedulerPatch) => void>();
+    const demoMetformin = makeDose({
+      id: 'dose_metformin_demo',
+      patientId: 'patient_ramesh',
+      scheduledTime: Timestamp.fromDate(new Date(2026, 10, 25, 8, 0, 0, 0)),
+      status: 'due',
+      followUpSent: true,
+      escalationAlertSent: false,
+    });
+
+    render(
+      <SchedulerHarness
+        doses={[demoMetformin]}
+        patientId="patient_ramesh"
+        options={{ isDemoSession: true, onDemoDoseUpdate }}
+      />
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
     expect(onDemoDoseUpdate).not.toHaveBeenCalled();
   });
 });
