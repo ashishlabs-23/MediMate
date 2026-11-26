@@ -145,7 +145,7 @@ describe('LoginScreen', () => {
       'false'
     );
     expect(screen.queryByRole('radiogroup', { name: 'Select User Role' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/your full name/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/display name/i)).not.toBeInTheDocument();
 
     // Unique button matching /sign in/i (Google button is "Continue with Google", trial buttons avoid "sign in")
     const signInBtn = screen.getByRole('button', { name: /sign in/i });
@@ -154,8 +154,8 @@ describe('LoginScreen', () => {
 
     // Trial sandbox section appears AFTER personal auth form
     const trialSection = screen.getByTestId('trial-demo-section');
-    expect(trialSection).toHaveTextContent(/Try Demo \(Sample Data Only\)/i);
-    expect(trialSection).toHaveTextContent(/not saved to a personal account/i);
+    expect(trialSection).toHaveTextContent(/Try Demo/i);
+    expect(trialSection).toHaveTextContent(/Sample Data Only/i);
     expect(
       signInBtn.compareDocumentPosition(trialSection) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
@@ -223,7 +223,7 @@ describe('LoginScreen', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Create New Account' }));
     fireEvent.click(screen.getByRole('radio', { name: /Family Caregiver/i }));
-    fireEvent.change(screen.getByLabelText(/Your Full Name/i), {
+    fireEvent.change(screen.getByLabelText(/Display Name/i), {
       target: { value: '  Anita Rao  ' },
     });
     fireEvent.change(screen.getByLabelText('Email address'), {
@@ -370,7 +370,7 @@ describe('LoginScreen', () => {
     expect(screen.getByRole('status')).toHaveTextContent(/Password reset email sent to ramesh@example\.com/i);
 
     // Back to Sign In clears reset panel and banners
-    fireEvent.click(within(resetPanel).getByRole('button', { name: 'Back to Sign In' }));
+    fireEvent.click(within(resetPanel).getByRole('button', { name: /Back to Sign In/i }));
     expect(screen.queryByTestId('password-reset-panel')).not.toBeInTheDocument();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sign In' })).toBeInTheDocument();
