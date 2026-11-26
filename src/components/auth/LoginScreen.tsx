@@ -93,6 +93,15 @@ export function LoginScreen() {
           msg = 'Password should be at least 6 characters.';
         } else if (err.message.includes('auth/user-not-found')) {
           msg = 'No account found with this email. Click "Create New Account" below.';
+        } else if (
+          err.message.includes('auth/configuration-not-found') ||
+          err.message.includes('CONFIGURATION_NOT_FOUND')
+        ) {
+          msg = 'Firebase Authentication is not activated yet in the Firebase Console. Click "Get Started" in Firebase Console > Authentication, or use the Quick Demo Account button above.';
+        } else if (
+          err.message.includes('auth/operation-not-allowed')
+        ) {
+          msg = 'Email/Password sign-in is not enabled in Firebase Console. Please enable it under Authentication > Sign-in method.';
         } else {
           msg = err.message;
         }
