@@ -130,9 +130,9 @@ function mapGoogleAuthError(err: unknown): string | null {
   switch (code) {
     case 'auth/popup-closed-by-user':
     case 'auth/cancelled-popup-request':
-      return null;
     case 'auth/popup-blocked':
-      return 'Google Sign-In popup was blocked by your browser. Please allow popups for this site and try again.';
+      // Handled silently via redirect fallback — never shown as an error message
+      return null;
     case 'auth/account-exists-with-different-credential':
       return 'An account already exists with this email using a different sign-in method. Please sign in with your email and password.';
     case 'auth/operation-not-allowed':
@@ -331,21 +331,25 @@ export function LoginScreen() {
         if (hasValidFirebaseAuth(auth) && typeof signInWithRedirect === 'function') {
           try {
             writePendingGoogleRedirectFlag();
+            setSuccessMsg('Redirecting to Google Sign-In… please wait.');
+            setIsSubmitting(false);
             await signInWithRedirect(auth, provider);
             return;
           } catch (redirectErr: unknown) {
             clearPendingGoogleRedirectFlag();
-            const mappedRedirectErr = mapGoogleAuthError(redirectErr);
+            setSuccessMsg(null);
             setErrorMsg(
-              mappedRedirectErr ||
-                'Google Sign-In popup was blocked by your browser. Please allow popups for this site and try again.'
+              'Your browser blocked the Google Sign-In popup. Please allow popups for this site, or try in a different browser.'
             );
+            setIsSubmitting(false);
             return;
           }
         }
+        // Redirect not available — guide the user clearly
         setErrorMsg(
-          'Google Sign-In popup was blocked by your browser. Please allow popups for this site and try again.'
+          'Your browser blocked the Google Sign-In popup. Please allow popups for this site and try again.'
         );
+        setIsSubmitting(false);
         return;
       }
 
