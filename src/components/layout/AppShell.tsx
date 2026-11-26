@@ -228,6 +228,23 @@ export function AppShell({ children }: AppShellProps) {
             </button>
           </div>
         </nav>
+
+        {isDemoSession && (
+          <div
+            role="note"
+            data-testid="trial-mode-banner"
+            className="bg-brand-teal-dark border-t border-white/20 text-white text-xs sm:text-sm"
+          >
+            <div className="max-w-5xl mx-auto px-4 py-1.5 flex flex-wrap items-center justify-between gap-2">
+              <span className="font-semibold tracking-wide">
+                Trial Mode · Sample Data
+              </span>
+              <span className="text-white">
+                Exploring with preloaded sample records. Changes are not saved to a personal account.
+              </span>
+            </div>
+          </div>
+        )}
       </header>
 
       <InstallPromptBanner />

@@ -8,6 +8,7 @@ import { Timestamp } from 'firebase/firestore';
 import { afterEach, vi } from 'vitest';
 import type { AuthContextValue } from '@/contexts/AuthContext';
 import type {
+  AccessibilityPreferences,
   CareCircleDocument,
   DoseLogDocument,
   MedicationDocument,
@@ -32,6 +33,12 @@ const OPTIONAL_MODULES = import.meta.glob([
   '../../../src/pages/LandingPage.tsx',
   '../../../src/domain/meals.ts',
   '../../../src/lib/sound.ts',
+  '../../../src/lib/careCircleService.ts',
+  '../../../src/components/auth/LoginScreen.tsx',
+  '../../../src/components/layout/AppShell.tsx',
+  '../../../src/hooks/useReminderScheduler.ts',
+  '../../../src/pages/TodayView.tsx',
+  '../../../src/pages/CaregiverDashboard.tsx',
   '../../../src/components/dose/MealBadge.tsx',
   '../../../src/components/caregiver/AddMedicationModal.tsx',
   '../../../src/components/caregiver/AdherenceHistory.tsx',
@@ -40,12 +47,22 @@ const OPTIONAL_MODULES = import.meta.glob([
   '../../../server/src/firebaseAdmin.ts',
   '../../../server/src/jobs/dailyDoseLogs.ts',
   '../../../server/src/jobs/dueDosesEscalation.ts',
+  '../../../server/src/jobs/eodMissedCloseout.ts',
+  '../../../functions/src/generateDailyDoseLogs.ts',
+  '../../../functions/src/checkDueDosesAndEscalate.ts',
+  '../../../functions/src/closeMissedDoses.ts',
 ]);
 
 const RELATIVE_KEY_MAP: Record<string, string> = {
   'src/pages/LandingPage.tsx': '../../../src/pages/LandingPage.tsx',
   'src/domain/meals.ts': '../../../src/domain/meals.ts',
   'src/lib/sound.ts': '../../../src/lib/sound.ts',
+  'src/lib/careCircleService.ts': '../../../src/lib/careCircleService.ts',
+  'src/components/auth/LoginScreen.tsx': '../../../src/components/auth/LoginScreen.tsx',
+  'src/components/layout/AppShell.tsx': '../../../src/components/layout/AppShell.tsx',
+  'src/hooks/useReminderScheduler.ts': '../../../src/hooks/useReminderScheduler.ts',
+  'src/pages/TodayView.tsx': '../../../src/pages/TodayView.tsx',
+  'src/pages/CaregiverDashboard.tsx': '../../../src/pages/CaregiverDashboard.tsx',
   'src/components/dose/MealBadge.tsx': '../../../src/components/dose/MealBadge.tsx',
   'src/components/caregiver/AddMedicationModal.tsx':
     '../../../src/components/caregiver/AddMedicationModal.tsx',
@@ -57,6 +74,10 @@ const RELATIVE_KEY_MAP: Record<string, string> = {
   'server/src/firebaseAdmin.ts': '../../../server/src/firebaseAdmin.ts',
   'server/src/jobs/dailyDoseLogs.ts': '../../../server/src/jobs/dailyDoseLogs.ts',
   'server/src/jobs/dueDosesEscalation.ts': '../../../server/src/jobs/dueDosesEscalation.ts',
+  'server/src/jobs/eodMissedCloseout.ts': '../../../server/src/jobs/eodMissedCloseout.ts',
+  'functions/src/generateDailyDoseLogs.ts': '../../../functions/src/generateDailyDoseLogs.ts',
+  'functions/src/checkDueDosesAndEscalate.ts': '../../../functions/src/checkDueDosesAndEscalate.ts',
+  'functions/src/closeMissedDoses.ts': '../../../functions/src/closeMissedDoses.ts',
 };
 
 export function hasProjectFile(relPath: string): boolean {
@@ -128,16 +149,26 @@ export function makeUserProfile(
   };
 }
 
+export type ExtendedAuthContextValue = AuthContextValue & {
+  refreshUserProfile: () => Promise<void>;
+  isDemo: boolean;
+  updateAccessibilityPreferences: (patch: Partial<AccessibilityPreferences>) => Promise<void>;
+};
+
 export function makeAuthValue(options: {
   isLoading?: boolean;
   authenticated?: boolean;
   role?: UserRole;
   uid?: string;
   displayName?: string;
+  timezone?: string;
   nullProfile?: boolean;
+  isDemo?: boolean;
   signOut?: () => Promise<void>;
   loginAsDemo?: (role: UserRole) => void;
-} = {}): AuthContextValue {
+  refreshUserProfile?: () => Promise<void>;
+  updateAccessibilityPreferences?: (patch: Partial<AccessibilityPreferences>) => Promise<void>;
+} = {}): ExtendedAuthContextValue {
   const isLoading = options.isLoading ?? false;
   const authenticated = options.authenticated ?? false;
   const role = options.role ?? 'elderly';
@@ -157,15 +188,23 @@ export function makeAuthValue(options: {
 
   const userProfile =
     authenticated && !options.nullProfile
-      ? makeUserProfile(role, { uid, displayName })
+      ? makeUserProfile(role, {
+          uid,
+          displayName,
+          ...(options.timezone ? { timezone: options.timezone } : {}),
+        })
       : null;
 
   return {
     firebaseUser,
     userProfile,
     isLoading,
+    isDemo: options.isDemo ?? false,
     signOut: options.signOut ?? vi.fn(async () => {}),
     loginAsDemo: options.loginAsDemo ?? vi.fn(),
+    refreshUserProfile: options.refreshUserProfile ?? vi.fn(async () => {}),
+    updateAccessibilityPreferences:
+      options.updateAccessibilityPreferences ?? vi.fn(async () => {}),
   };
 }
 
@@ -417,15 +456,21 @@ export function toMedicationDocument(raw: Record<string, unknown>): MedicationDo
   };
 }
 
+export type ExtendedCareCircleDocument = CareCircleDocument & {
+  patientPhone?: string;
+  lastRedeemedInviteCode?: string;
+};
+
 /**
  * Converts a MockFirestoreDb record into a typed CareCircleDocument with real Firebase Timestamps.
  */
-export function toCareCircleDocument(raw: Record<string, unknown>): CareCircleDocument {
+export function toCareCircleDocument(raw: Record<string, unknown>): ExtendedCareCircleDocument {
   const membersRaw = Array.isArray(raw.members) ? raw.members : [];
   return {
     id: String(raw.id ?? ''),
     patientId: String(raw.patientId ?? ''),
     patientName: String(raw.patientName ?? 'Patient'),
+    patientPhone: raw.patientPhone ? String(raw.patientPhone) : undefined,
     caregiverIds: Array.isArray(raw.caregiverIds) ? raw.caregiverIds.map(String) : [],
     members: membersRaw.map((m) => {
       const rec = m as Record<string, unknown>;
@@ -441,6 +486,9 @@ export function toCareCircleDocument(raw: Record<string, unknown>): CareCircleDo
       };
     }),
     inviteCode: raw.inviteCode ? String(raw.inviteCode) : undefined,
+    lastRedeemedInviteCode: raw.lastRedeemedInviteCode
+      ? String(raw.lastRedeemedInviteCode)
+      : undefined,
     createdAt: toTimestamp(raw.createdAt),
     updatedAt: toTimestamp(raw.updatedAt),
   };
@@ -649,6 +697,134 @@ export function createMockFirestoreAdapter(
         count += 1;
       }
       return count;
+    },
+
+    // =========================================================================
+    // Care-Circle Multi-Tenancy & /care_invites Helpers (R6)
+    // =========================================================================
+
+    generateInviteCode(): string {
+      const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      let suffix = '';
+      for (let i = 0; i < 6; i++) {
+        suffix += alphabet[Math.floor(Math.random() * alphabet.length)];
+      }
+      const code = `MED-${suffix}`;
+      return code === 'MED-7892' ? 'MED-934812' : code;
+    },
+
+    async lookupCareInvite(inviteCode: string): Promise<Record<string, unknown> | null> {
+      const normalized = inviteCode.trim().toUpperCase();
+      if (!normalized) return null;
+      return db.getDoc('care_invites', normalized, getAuth());
+    },
+
+    async createOrSyncCareInvite(input: {
+      code: string;
+      patientId: string;
+      patientName: string;
+      createdBy: string;
+      active?: boolean;
+    }): Promise<Record<string, unknown>> {
+      const normalized = input.code.trim().toUpperCase();
+      const now = new Date();
+      return db.setDoc(
+        'care_invites',
+        normalized,
+        {
+          id: normalized,
+          code: normalized,
+          patientId: input.patientId,
+          patientName: input.patientName,
+          createdBy: input.createdBy,
+          active: input.active ?? true,
+          createdAt: now,
+          updatedAt: now,
+        },
+        getAuth()
+      );
+    },
+
+    subscribeToCareCirclesForCaregiver(
+      caregiverUid: string,
+      callback: (circles: ExtendedCareCircleDocument[]) => void,
+      onError?: (err: Error) => void
+    ) {
+      return db.subscribe(
+        'care_circles',
+        (doc) => Array.isArray(doc.caregiverIds) && doc.caregiverIds.includes(caregiverUid),
+        (docs) => callback(docs.map((d) => toCareCircleDocument(d))),
+        getAuth(),
+        onError
+      );
+    },
+
+    async getCareCirclesForCaregiver(
+      caregiverUid: string
+    ): Promise<ExtendedCareCircleDocument[]> {
+      const docs = db.queryDocs(
+        'care_circles',
+        (doc) => Array.isArray(doc.caregiverIds) && doc.caregiverIds.includes(caregiverUid),
+        getAuth()
+      );
+      return docs.map((d) => toCareCircleDocument(d));
+    },
+
+    async redeemCareInviteCode(
+      rawCode: string,
+      caregiver: { uid: string; displayName: string; email: string }
+    ): Promise<ExtendedCareCircleDocument> {
+      const auth = getAuth();
+      const normalized = rawCode.trim().toUpperCase();
+      if (!/^MED-[A-Z0-9]{4,10}$/.test(normalized)) {
+        throw new Error('Invalid invite code format. Expected MED-XXXXXX.');
+      }
+      const invite = db.getDoc('care_invites', normalized, auth);
+      if (!invite || invite.active !== true) {
+        throw new Error('Invite code not found or no longer active.');
+      }
+      const patientId = String(invite.patientId ?? '');
+      if (!patientId || patientId === caregiver.uid) {
+        throw new Error('Cannot redeem your own patient invite code.');
+      }
+
+      const existing = db.inspectDoc('care_circles', patientId);
+      if (!existing) {
+        throw new Error('Patient care circle not found.');
+      }
+      const existingCaregivers = Array.isArray(existing.caregiverIds)
+        ? existing.caregiverIds.map(String)
+        : [];
+      if (existingCaregivers.includes(caregiver.uid)) {
+        return toCareCircleDocument(existing);
+      }
+
+      const existingMembers = Array.isArray(existing.members) ? existing.members : [];
+      const now = new Date();
+      const updated = db.updateDoc(
+        'care_circles',
+        patientId,
+        {
+          caregiverIds: [...existingCaregivers, caregiver.uid],
+          members: [
+            ...existingMembers,
+            {
+              userId: caregiver.uid,
+              displayName: caregiver.displayName,
+              email: caregiver.email,
+              role: existingCaregivers.length === 0 ? 'primary' : 'secondary',
+              permissions: ['read', 'write_schedule', 'receive_alerts'],
+              status: 'active',
+              invitedAt: now,
+              joinedAt: now,
+            },
+          ],
+          lastRedeemedInviteCode: normalized,
+          updatedAt: now,
+        },
+        auth
+      );
+      return toCareCircleDocument(updated);
     },
   };
 }

@@ -68,7 +68,7 @@ function friendlyDate(): string {
 }
 
 export function TodayView() {
-  const { userProfile, firebaseUser } = useAuthContext();
+  const { userProfile, firebaseUser, isDemo } = useAuthContext();
   const [doses, setDoses] = useState<DoseLogDocument[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -76,26 +76,33 @@ export function TodayView() {
   const [pendingUndo, setPendingUndo] = useState<PendingUndoCommit | null>(null);
   const pendingUndoRef = useRef<PendingUndoCommit | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
-  const logsGeneratedRef = useRef(false);
+  const logsGeneratedForRef = useRef<string | null>(null);
 
   const patientId = firebaseUser?.uid ?? '';
   const displayName = userProfile?.displayName?.split(' ')[0] ?? 'there';
   const date = todayISO();
 
   // Demo sessions (loginAsDemo) use a synthetic mock user with no real Firebase Auth token.
-  // In test environment (Vitest), mockDb is used so we allow normal Firestore subscription flow.
+  // In test environment (Vitest), mockDb is used unless isDemo is explicitly true.
   const isTestMode = typeof import.meta !== 'undefined' && import.meta.env?.MODE === 'test';
   const isDemoSession =
-    !isTestMode &&
-    (patientId === 'patient_ramesh' ||
-      patientId === 'caregiver_priya' ||
-      patientId.startsWith('demo_'));
+    Boolean(isDemo) ||
+    (!isTestMode &&
+      (patientId === 'patient_ramesh' ||
+        patientId === 'caregiver_priya' ||
+        patientId.startsWith('demo_')));
 
-  const commitDoseUpdate = useCallback((doseId: string, patch: DoseUpdatePatch) => {
-    return updateDoseLog(doseId, patch).catch((err: unknown) => {
-      console.warn('Backend update notice (offline/demo mode):', err);
-    });
-  }, []);
+  const commitDoseUpdate = useCallback(
+    (doseId: string, patch: DoseUpdatePatch) => {
+      if (isDemoSession) {
+        return Promise.resolve();
+      }
+      return updateDoseLog(doseId, patch).catch((err: unknown) => {
+        console.warn('Backend update notice (offline/demo mode):', err);
+      });
+    },
+    [isDemoSession]
+  );
 
   const flushPendingUndo = useCallback(
     (clearUiState = true) => {
@@ -125,11 +132,11 @@ export function TodayView() {
   // ── Client-side dose log generation (replaces Cloud Function) ─────────────
   // Runs once per mount per day. Idempotent — safe to call multiple times.
   useEffect(() => {
-    if (!patientId || logsGeneratedRef.current) return;
-    logsGeneratedRef.current = true;
+    if (!patientId || isDemoSession || logsGeneratedForRef.current === patientId) return;
+    logsGeneratedForRef.current = patientId;
 
     generateTodayLogs(patientId).catch((err: unknown) => {
-      if (patientId === 'patient_ramesh' || isDemoSession) return;
+      if (patientId === 'patient_ramesh') return;
       const msg = err instanceof Error ? err.message : 'Failed to generate today\u2019s doses';
       setErrorMsg(msg);
     });
@@ -137,10 +144,33 @@ export function TodayView() {
 
   // ── Client-side reminder scheduler (replaces Cloud Function) ─────────────
   // Schedules browser notifications at T, T+15m, T+30m for each active dose.
-  useReminderScheduler(doses, patientId);
+  const handleDemoSchedulerUpdate = useCallback(
+    (doseId: string, patch: DoseUpdatePatch) => {
+      setDoses((prev) =>
+        prev.map((d) => {
+          if (d.id !== doseId) return d;
+          if (d.status === 'taken' || d.status === 'missed') return d;
+          return { ...d, ...patch };
+        })
+      );
+    },
+    []
+  );
+
+  useReminderScheduler(doses, patientId, {
+    isDemoSession,
+    onDemoDoseUpdate: handleDemoSchedulerUpdate,
+  });
 
   useEffect(() => {
-    if (!patientId) return;
+    if (!patientId && !isDemoSession) return;
+
+    if (isDemoSession) {
+      setDoses(applyPendingOverlay(getMockDoses(date, false), pendingUndoRef.current));
+      setIsLoading(false);
+      setErrorMsg(null);
+      return;
+    }
 
     setIsLoading(true);
     setErrorMsg(null);
@@ -152,7 +182,7 @@ export function TodayView() {
         const baseDoses =
           updatedDoses.length > 0
             ? updatedDoses
-            : patientId === 'patient_ramesh' || isDemoSession
+            : patientId === 'patient_ramesh'
             ? getMockDoses(date, false)
             : [];
         setDoses(applyPendingOverlay(baseDoses, pendingUndoRef.current));
@@ -161,7 +191,7 @@ export function TodayView() {
       },
       (err) => {
         console.warn('TodayView subscription fallback:', err.message);
-        if (patientId === 'patient_ramesh' || isDemoSession) {
+        if (patientId === 'patient_ramesh') {
           setDoses(applyPendingOverlay(getMockDoses(date, false), pendingUndoRef.current));
           setErrorMsg(null);
         } else {
@@ -310,18 +340,20 @@ export function TodayView() {
 
       setLiveMessage(`${dose.medicationName} snoozed for 10 minutes.`);
 
-      try {
-        await updateDoseLog(doseId, {
-          status: result.nextStatus as DoseStatus,
-          snoozeCount: result.snoozeCount,
-          snoozedAt: Timestamp.fromDate(now),
-          snoozeUntil: result.snoozeUntil ? Timestamp.fromDate(result.snoozeUntil) : null,
-        });
-      } catch (err) {
-        console.warn('Backend snooze notice (offline/demo mode):', err);
+      if (!isDemoSession) {
+        try {
+          await updateDoseLog(doseId, {
+            status: result.nextStatus as DoseStatus,
+            snoozeCount: result.snoozeCount,
+            snoozedAt: Timestamp.fromDate(now),
+            snoozeUntil: result.snoozeUntil ? Timestamp.fromDate(result.snoozeUntil) : null,
+          });
+        } catch (err) {
+          console.warn('Backend snooze notice (offline/demo mode):', err);
+        }
       }
     },
-    [doses]
+    [doses, isDemoSession]
   );
 
   // Find next dose that is due or upcoming (not taken/missed)

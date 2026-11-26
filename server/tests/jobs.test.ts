@@ -4,16 +4,30 @@ import * as admin from 'firebase-admin';
 import type { FirebaseAdminContext } from '../src/firebaseAdmin';
 import {
   BATCH_LIMIT as DAILY_BATCH_LIMIT,
+  computeDateStringInTimezone,
   computeISTDateString,
   computeISTScheduledTimestamp,
+  computeScheduledTimestampInTimezone,
+  DEFAULT_TIMEZONE,
   generateForDate,
+  isMidnightHourInTimezone,
   parseValidatedDateString,
+  resolveValidTimezone,
 } from '../src/jobs/dailyDoseLogs';
 import {
   BATCH_LIMIT as ESCALATION_BATCH_LIMIT,
+  ESCALATION_LOOKBACK_MS,
   processDueDoses,
 } from '../src/jobs/dueDosesEscalation';
-import { createApp, startInternalCron } from '../src/index';
+import {
+  BATCH_LIMIT as CLOSEOUT_BATCH_LIMIT,
+  closeMissedDoses,
+} from '../src/jobs/eodMissedCloseout';
+import {
+  createApp,
+  runMidnightTimezoneCycle,
+  startInternalCron,
+} from '../src/index';
 
 type StoreMap = Map<string, Record<string, unknown>>;
 
@@ -113,6 +127,86 @@ class MockDocRef {
   }
 }
 
+function toComparableValue(val: unknown): number | string | null {
+  if (val === null || val === undefined) return null;
+  if (typeof val === 'number') return val;
+  if (typeof val === 'string') return val;
+  if (val instanceof Date) return val.getTime();
+  if (typeof val === 'object') {
+    const tsLike = val as {
+      toMillis?: unknown;
+      seconds?: unknown;
+      nanoseconds?: unknown;
+    };
+    if (typeof tsLike.toMillis === 'function') {
+      return (tsLike as { toMillis: () => number }).toMillis();
+    }
+    if (typeof tsLike.seconds === 'number') {
+      const nanos = typeof tsLike.nanoseconds === 'number' ? tsLike.nanoseconds : 0;
+      return Math.floor(tsLike.seconds * 1000 + nanos / 1e6);
+    }
+  }
+  return null;
+}
+
+interface QueryFilter {
+  field: string;
+  op: string;
+  value: unknown;
+}
+
+class MockQuery {
+  constructor(
+    private readonly store: StoreMap,
+    private readonly nowProvider: () => Date,
+    private readonly filters: QueryFilter[]
+  ) {}
+
+  where(field: string, op: string, value: unknown): MockQuery {
+    return new MockQuery(this.store, this.nowProvider, [
+      ...this.filters,
+      { field, op, value },
+    ]);
+  }
+
+  async get(): Promise<{ docs: MockDocSnapshot[]; empty: boolean; size: number }> {
+    const docs: MockDocSnapshot[] = [];
+    for (const [id, data] of this.store.entries()) {
+      const matchesAll = this.filters.every(({ field, op, value }) => {
+        const fieldVal = data[field];
+        if (op === '==') {
+          return fieldVal === value;
+        }
+        if (op === '!=') {
+          return fieldVal !== value;
+        }
+        if (op === 'in' && Array.isArray(value)) {
+          return value.includes(fieldVal);
+        }
+        if (op === 'not-in' && Array.isArray(value)) {
+          return !value.includes(fieldVal);
+        }
+        if (op === '>=' || op === '>' || op === '<=' || op === '<') {
+          const left = toComparableValue(fieldVal);
+          const right = toComparableValue(value);
+          if (left === null || right === null || typeof left !== typeof right) {
+            return false;
+          }
+          if (op === '>=') return left >= right;
+          if (op === '>') return left > right;
+          if (op === '<=') return left <= right;
+          return left < right;
+        }
+        return false;
+      });
+      if (matchesAll) {
+        docs.push(new MockDocSnapshot(id, new MockDocRef(id, this.store, this.nowProvider), data));
+      }
+    }
+    return { docs, empty: docs.length === 0, size: docs.length };
+  }
+}
+
 class MockCollectionRef {
   constructor(
     private readonly store: StoreMap,
@@ -123,25 +217,12 @@ class MockCollectionRef {
     return new MockDocRef(id, this.store, this.nowProvider);
   }
 
-  where(field: string, op: string, value: unknown): { get: () => Promise<{ docs: MockDocSnapshot[] }> } {
-    return {
-      get: async () => {
-        const docs: MockDocSnapshot[] = [];
-        for (const [id, data] of this.store.entries()) {
-          const fieldVal = data[field];
-          let matches = false;
-          if (op === '==') {
-            matches = fieldVal === value;
-          } else if (op === 'not-in' && Array.isArray(value)) {
-            matches = !value.includes(fieldVal);
-          }
-          if (matches) {
-            docs.push(new MockDocSnapshot(id, this.doc(id), data));
-          }
-        }
-        return { docs };
-      },
-    };
+  where(field: string, op: string, value: unknown): MockQuery {
+    return new MockQuery(this.store, this.nowProvider, [{ field, op, value }]);
+  }
+
+  async get(): Promise<{ docs: MockDocSnapshot[]; empty: boolean; size: number }> {
+    return new MockQuery(this.store, this.nowProvider, []).get();
   }
 }
 
@@ -823,7 +904,7 @@ describe('HTTP Express endpoints & x-cron-secret auth guard', () => {
     });
   });
 
-  it('registers internal node-cron tasks for 30 18 * * * and */5 * * * * UTC', () => {
+  it('registers internal node-cron tasks for 0,30 * * * * and */5 * * * * UTC', () => {
     const adminContext: FirebaseAdminContext = {
       app: null,
       db: null,
@@ -835,6 +916,373 @@ describe('HTTP Express endpoints & x-cron-secret auth guard', () => {
     for (const task of tasks) {
       task.stop();
     }
+  });
+});
+
+describe('R1, R3, R4, R5 Milestone M1 Additions', () => {
+  const originalCronSecret = process.env.CRON_SECRET;
+
+  afterEach(() => {
+    if (originalCronSecret === undefined) {
+      delete process.env.CRON_SECRET;
+    } else {
+      process.env.CRON_SECRET = originalCronSecret;
+    }
+  });
+
+  it('R1: escalates client-marked unconfirmed doses when escalationAlertSent is false without duplicating on rerun', async () => {
+    const mockDb = new MockAdminFirestore();
+    const db = mockDb as unknown as admin.firestore.Firestore;
+    const now = new Date('2026-11-25T03:05:00.000Z');
+    mockDb.setNow(now);
+
+    mockDb.seed('users', 'patient_r1', { fcmTokens: ['p-r1'] });
+    mockDb.seed('users', 'cg_r1', { fcmTokens: ['cg-r1'] });
+    mockDb.seed('care_circles', 'patient_r1', {
+      patientId: 'patient_r1',
+      caregiverIds: ['cg_r1'],
+    });
+    mockDb.seed('dose_logs', 'dose_client_unconfirmed', {
+      patientId: 'patient_r1',
+      medicationName: 'Metformin',
+      dosage: '500mg',
+      scheduledTime: admin.firestore.Timestamp.fromDate(
+        new Date(now.getTime() - 35 * 60 * 1000)
+      ),
+      status: 'unconfirmed',
+      snoozeCount: 0,
+      followUpSent: true,
+      escalationAlertSent: false,
+    });
+
+    const sentTokens: string[][] = [];
+    const mockMessaging = {
+      sendEachForMulticast: vi.fn(async (msg: admin.messaging.MulticastMessage) => {
+        sentTokens.push(msg.tokens);
+        return {
+          successCount: msg.tokens.length,
+          failureCount: 0,
+          responses: msg.tokens.map(() => ({ success: true })),
+        };
+      }),
+    } as unknown as admin.messaging.Messaging;
+
+    const first = await processDueDoses(db, now, mockMessaging);
+    expect(first.escalatedIds).toEqual(['dose_client_unconfirmed']);
+    expect(sentTokens).toEqual([['p-r1', 'cg-r1']]);
+    expect(mockDb.getDocData('dose_logs', 'dose_client_unconfirmed')?.escalationAlertSent).toBe(true);
+    expect(mockDb.getDocData('dose_logs', 'dose_client_unconfirmed')?.escalatedAt).toBeDefined();
+
+    const second = await processDueDoses(db, now, mockMessaging);
+    expect(second.escalatedIds).toEqual([]);
+    expect(sentTokens).toHaveLength(1);
+  });
+
+  it('R3: processDueDoses bounds query to 48h lookback and ignores stale doses > 48h old', async () => {
+    expect(ESCALATION_LOOKBACK_MS).toBe(48 * 60 * 60 * 1000);
+    const mockDb = new MockAdminFirestore();
+    const db = mockDb as unknown as admin.firestore.Firestore;
+    const now = new Date('2026-11-25T10:00:00.000Z');
+    mockDb.setNow(now);
+
+    // 49 hours old -> excluded by bounded query
+    mockDb.seed('dose_logs', 'dose_stale_49h', {
+      patientId: 'patient_1',
+      medicationName: 'Old Med',
+      dosage: '10mg',
+      scheduledTime: admin.firestore.Timestamp.fromDate(
+        new Date(now.getTime() - 49 * 60 * 60 * 1000)
+      ),
+      status: 'due',
+      snoozeCount: 0,
+      followUpSent: true,
+      escalationAlertSent: false,
+    });
+
+    // 47 hours old -> included by bounded query
+    mockDb.seed('dose_logs', 'dose_recent_47h', {
+      patientId: 'patient_1',
+      medicationName: 'Recent Med',
+      dosage: '20mg',
+      scheduledTime: admin.firestore.Timestamp.fromDate(
+        new Date(now.getTime() - 47 * 60 * 60 * 1000)
+      ),
+      status: 'due',
+      snoozeCount: 0,
+      followUpSent: true,
+      escalationAlertSent: false,
+    });
+
+    const result = await processDueDoses(db, now, null);
+    expect(result.escalatedIds).toEqual(['dose_recent_47h']);
+    expect(mockDb.getDocData('dose_logs', 'dose_stale_49h')?.status).toBe('due');
+    expect(mockDb.getDocData('dose_logs', 'dose_recent_47h')?.status).toBe('unconfirmed');
+  });
+
+  it('R3: closeMissedDoses transitions past-midnight non-terminal doses respecting per-patient timezones, idempotency, and 500-op chunking', async () => {
+    expect(CLOSEOUT_BATCH_LIMIT).toBe(500);
+    const mockDb = new MockAdminFirestore();
+    const db = mockDb as unknown as admin.firestore.Firestore;
+
+    // 19:00 UTC on Nov 25 = 00:30 IST on Nov 26 (Asia/Kolkata), 14:00 EST on Nov 25 (America/New_York)
+    const now = new Date('2026-11-25T19:00:00.000Z');
+    mockDb.setNow(now);
+
+    mockDb.seed('users', 'p_ist', { timezone: 'Asia/Kolkata' });
+    mockDb.seed('users', 'p_ny', { timezone: 'America/New_York' });
+
+    // Past-midnight IST doses (should close)
+    for (const [id, status] of [
+      ['ist_sched', 'scheduled'],
+      ['ist_due', 'due'],
+      ['ist_snoozed', 'snoozed'],
+      ['ist_unconf', 'unconfirmed'],
+    ] as const) {
+      mockDb.seed('dose_logs', id, {
+        patientId: 'p_ist',
+        scheduledDate: '2026-11-25',
+        scheduledTime: admin.firestore.Timestamp.fromDate(new Date('2026-11-25T02:30:00.000Z')),
+        status,
+        snoozeUntil: status === 'snoozed' ? admin.firestore.Timestamp.fromDate(new Date('2026-11-25T02:40:00.000Z')) : null,
+      });
+    }
+
+    // Already terminal IST dose (skipped by query)
+    mockDb.seed('dose_logs', 'ist_taken', {
+      patientId: 'p_ist',
+      scheduledDate: '2026-11-25',
+      scheduledTime: admin.firestore.Timestamp.fromDate(new Date('2026-11-25T02:30:00.000Z')),
+      status: 'taken',
+    });
+
+    // Today's IST dose (Nov 26 IST -> should NOT close)
+    mockDb.seed('dose_logs', 'ist_today', {
+      patientId: 'p_ist',
+      scheduledDate: '2026-11-26',
+      scheduledTime: admin.firestore.Timestamp.fromDate(new Date('2026-11-26T02:30:00.000Z')),
+      status: 'scheduled',
+    });
+
+    // NY dose on Nov 25 (still Nov 25 14:00 in NY -> should NOT close)
+    mockDb.seed('dose_logs', 'ny_today', {
+      patientId: 'p_ny',
+      scheduledDate: '2026-11-25',
+      scheduledTime: admin.firestore.Timestamp.fromDate(new Date('2026-11-25T13:00:00.000Z')),
+      status: 'due',
+    });
+
+    // Missing users doc & missing scheduledDate fallback to scheduledTime in IST
+    mockDb.seed('dose_logs', 'missing_user_past', {
+      patientId: 'p_missing',
+      scheduledTime: admin.firestore.Timestamp.fromDate(new Date('2026-11-25T10:00:00.000Z')),
+      status: 'unconfirmed',
+    });
+
+    const first = await closeMissedDoses(db, now);
+    expect(first.closedCount).toBe(5);
+    expect(first.skippedCount).toBe(2);
+    expect(first.missedIds).toEqual(
+      expect.arrayContaining(['ist_sched', 'ist_due', 'ist_snoozed', 'ist_unconf', 'missing_user_past'])
+    );
+
+    expect(mockDb.getDocData('dose_logs', 'ist_snoozed')?.status).toBe('missed');
+    expect(mockDb.getDocData('dose_logs', 'ist_snoozed')?.snoozeUntil).toBeNull();
+    expect(mockDb.getDocData('dose_logs', 'ist_snoozed')?.missedAt).toBeDefined();
+    expect(mockDb.getDocData('dose_logs', 'ist_today')?.status).toBe('scheduled');
+    expect(mockDb.getDocData('dose_logs', 'ny_today')?.status).toBe('due');
+    expect(mockDb.getDocData('dose_logs', 'ist_taken')?.status).toBe('taken');
+
+    // Idempotent re-run
+    const second = await closeMissedDoses(db, now);
+    expect(second.closedCount).toBe(0);
+    expect(second.missedIds).toEqual([]);
+
+    // Batch chunking (> 500)
+    const bulkDb = new MockAdminFirestore();
+    bulkDb.setNow(now);
+    for (let i = 0; i < 550; i++) {
+      bulkDb.seed('dose_logs', `old_${i}`, {
+        patientId: 'p_bulk',
+        scheduledDate: '2026-11-24',
+        scheduledTime: admin.firestore.Timestamp.fromDate(new Date('2026-11-24T08:00:00.000Z')),
+        status: 'unconfirmed',
+      });
+    }
+    const bulkResult = await closeMissedDoses(
+      bulkDb as unknown as admin.firestore.Firestore,
+      now
+    );
+    expect(bulkResult.closedCount).toBe(550);
+    expect(bulkDb.batchCommitSizes).toEqual([500, 50]);
+  });
+
+  it('R4: pure-JS Intl timezone helpers handle invalid fallbacks, DST transitions, multi-timezone generation, and midnight cycle', async () => {
+    expect(resolveValidTimezone('  America/New_York  ')).toBe('America/New_York');
+    expect(resolveValidTimezone('Invalid/Zone')).toBe(DEFAULT_TIMEZONE);
+    expect(resolveValidTimezone('')).toBe(DEFAULT_TIMEZONE);
+    expect(resolveValidTimezone(null)).toBe(DEFAULT_TIMEZONE);
+
+    // EST (-05:00) vs EDT (-04:00)
+    expect(
+      computeScheduledTimestampInTimezone('2026-01-15', '08:00', 'America/New_York').toISOString()
+    ).toBe('2026-01-15T13:00:00.000Z');
+    expect(
+      computeScheduledTimestampInTimezone('2026-07-15', '08:00', 'America/New_York').toISOString()
+    ).toBe('2026-07-15T12:00:00.000Z');
+    expect(
+      computeScheduledTimestampInTimezone('2026-11-25', '08:00', 'UTC').toISOString()
+    ).toBe('2026-11-25T08:00:00.000Z');
+    expect(
+      computeDateStringInTimezone(new Date('2026-11-26T04:59:59.000Z'), 'America/New_York')
+    ).toBe('2026-11-25');
+    expect(
+      computeDateStringInTimezone(new Date('2026-11-26T05:00:00.000Z'), 'America/New_York')
+    ).toBe('2026-11-26');
+
+    expect(isMidnightHourInTimezone(new Date('2026-11-25T18:30:00.000Z'), 'Asia/Kolkata')).toBe(true);
+    expect(isMidnightHourInTimezone(new Date('2026-11-25T18:30:00.000Z'), 'America/New_York')).toBe(false);
+    expect(isMidnightHourInTimezone(new Date('2026-11-26T05:00:00.000Z'), 'America/New_York')).toBe(true);
+
+    const mockDb = new MockAdminFirestore();
+    const db = mockDb as unknown as admin.firestore.Firestore;
+    mockDb.seed('users', 'p_ist', { timezone: 'Asia/Kolkata' });
+    mockDb.seed('users', 'p_ny', { timezone: 'America/New_York' });
+
+    mockDb.seed('medications', 'm_ist', {
+      patientId: 'p_ist',
+      name: 'Med IST',
+      dosage: '10mg',
+      active: true,
+      schedule: { times: ['08:00'], frequency: 'daily', startDate: '2026-11-01' },
+    });
+    mockDb.seed('medications', 'm_ny', {
+      patientId: 'p_ny',
+      name: 'Med NY',
+      dosage: '20mg',
+      active: true,
+      schedule: { times: ['08:00'], frequency: 'daily', startDate: '2026-11-01' },
+    });
+    mockDb.seed('dose_logs', 'old_ist_dose', {
+      patientId: 'p_ist',
+      scheduledDate: '2026-11-25',
+      scheduledTime: admin.firestore.Timestamp.fromDate(new Date('2026-11-25T02:30:00.000Z')),
+      status: 'due',
+    });
+    mockDb.seed('dose_logs', 'old_ny_dose', {
+      patientId: 'p_ny',
+      scheduledDate: '2026-11-25',
+      scheduledTime: admin.firestore.Timestamp.fromDate(new Date('2026-11-25T13:00:00.000Z')),
+      status: 'due',
+    });
+
+    // Non-midnight tick (12:00 UTC = 17:30 IST, 07:00 EST) -> early no-op
+    const nonMidnight = await runMidnightTimezoneCycle(db, new Date('2026-11-25T12:00:00.000Z'));
+    expect(nonMidnight.midnightTimezones).toEqual([]);
+    expect(nonMidnight.closedCount).toBe(0);
+    expect(nonMidnight.createdCount).toBe(0);
+
+    // 18:30 UTC on Nov 25 -> midnight in Asia/Kolkata (2026-11-26) only!
+    const istTick = await runMidnightTimezoneCycle(db, new Date('2026-11-25T18:30:00.000Z'));
+    expect(istTick.midnightTimezones).toEqual(['Asia/Kolkata']);
+    expect(istTick.closedCount).toBe(1);
+    expect(istTick.createdCount).toBe(1);
+    expect(mockDb.getDocData('dose_logs', 'old_ist_dose')?.status).toBe('missed');
+    expect(mockDb.getDocData('dose_logs', 'old_ny_dose')?.status).toBe('due');
+    expect(
+      (
+        mockDb.getDocData('dose_logs', 'p_ist_m_ist_2026-11-26_0800')
+          ?.scheduledTime as admin.firestore.Timestamp
+      )
+        .toDate()
+        .toISOString()
+    ).toBe('2026-11-26T02:30:00.000Z');
+    expect(mockDb.getDocData('dose_logs', 'p_ny_m_ny_2026-11-26_0800')).toBeUndefined();
+
+    // 05:00 UTC on Nov 26 -> midnight in America/New_York (2026-11-26) only!
+    const nyTick = await runMidnightTimezoneCycle(db, new Date('2026-11-26T05:00:00.000Z'));
+    expect(nyTick.midnightTimezones).toEqual(['America/New_York']);
+    expect(nyTick.closedCount).toBe(1);
+    expect(nyTick.createdCount).toBe(1);
+    expect(mockDb.getDocData('dose_logs', 'old_ny_dose')?.status).toBe('missed');
+    expect(
+      (
+        mockDb.getDocData('dose_logs', 'p_ny_m_ny_2026-11-26_0800')
+          ?.scheduledTime as admin.firestore.Timestamp
+      )
+        .toDate()
+        .toISOString()
+    ).toBe('2026-11-26T13:00:00.000Z');
+  });
+
+  it('R5: GET /ping, flat createApp options, and POST /api/jobs/close-missed-doses auth/503/200', async () => {
+    // Uninitialized flat options (matching E2E f12/b12 style)
+    const appUninit = createApp({
+      db: null,
+      messaging: null,
+      isInitialized: false,
+      jobsActive: false,
+      cronSecret: 'ping-secret',
+    });
+
+    await withServer(appUninit, async (baseUrl) => {
+      const rootRes = await fetch(`${baseUrl}/`);
+      expect(rootRes.status).toBe(200);
+      const rootBody = (await rootRes.json()) as { endpoints: string[] };
+      expect(rootBody.endpoints).toContain('/ping');
+      expect(rootBody.endpoints).toContain('/api/jobs/close-missed-doses');
+
+      const pingRes = await fetch(`${baseUrl}/ping`);
+      expect(pingRes.status).toBe(200);
+      const pingBody = (await pingRes.json()) as { ok: boolean; timestamp: string };
+      expect(pingBody.ok).toBe(true);
+      expect(Number.isNaN(Date.parse(pingBody.timestamp))).toBe(false);
+
+      const unauthRes = await fetch(`${baseUrl}/api/jobs/close-missed-doses`, {
+        method: 'POST',
+      });
+      expect(unauthRes.status).toBe(401);
+
+      const uninitRes = await fetch(`${baseUrl}/api/jobs/close-missed-doses`, {
+        method: 'POST',
+        headers: { 'x-cron-secret': 'ping-secret' },
+      });
+      expect(uninitRes.status).toBe(503);
+    });
+
+    const mockDb = new MockAdminFirestore();
+    mockDb.seed('dose_logs', 'very_old_dose', {
+      patientId: 'p1',
+      scheduledDate: '2020-01-01',
+      scheduledTime: admin.firestore.Timestamp.fromDate(new Date('2020-01-01T02:30:00.000Z')),
+      status: 'unconfirmed',
+    });
+
+    const appInit = createApp({
+      db: mockDb as unknown as admin.firestore.Firestore,
+      messaging: null,
+      isInitialized: true,
+      jobsActive: false,
+      cronSecret: 'ping-secret',
+    });
+
+    await withServer(appInit, async (baseUrl) => {
+      const okRes = await fetch(`${baseUrl}/api/jobs/close-missed-doses`, {
+        method: 'POST',
+        headers: { 'x-cron-secret': 'ping-secret' },
+      });
+      expect(okRes.status).toBe(200);
+      const okBody = (await okRes.json()) as {
+        closedCount: number;
+        skippedCount: number;
+        missedIds: string[];
+      };
+      expect(okBody).toEqual({
+        closedCount: 1,
+        skippedCount: 0,
+        missedIds: ['very_old_dose'],
+      });
+      expect(mockDb.getDocData('dose_logs', 'very_old_dose')?.status).toBe('missed');
+    });
   });
 });
 

@@ -91,8 +91,10 @@ describe('Tier 1 — F06: Gentle Reminder (T+15m) & Caregiver Escalation (T+30m)
     expect(result.nextStatus).toBe('unconfirmed');
     expect(result.sendEscalationAlert).toBe(true);
     expect(sim.getDose().status).toBe('unconfirmed');
-    expect(sim.getDose().escalationAlertSent).toBe(true);
-    expect(sim.getDose().escalatedAt?.getTime()).toBe(T.getTime() + 30 * 60 * 1000);
+    expect(sim.getDose().snoozeUntil).toBeNull();
+    // R1: client T+30m transition must NOT mark escalationAlertSent: true or escalatedAt before backend escalation runs
+    expect(sim.getDose().escalationAlertSent).toBe(false);
+    expect(sim.getDose().escalatedAt).toBeNull();
     timeTravel.reset();
   });
 });

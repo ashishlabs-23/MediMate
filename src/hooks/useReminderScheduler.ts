@@ -40,7 +40,7 @@ async function ensureNotificationPermission(): Promise<boolean> {
 function showNotification(title: string, body: string, tag: string): void {
   if (!('serviceWorker' in navigator)) {
     // Fallback: direct Notification (requires tab focus)
-    if (Notification.permission === 'granted') {
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
       new Notification(title, { body, tag, icon: '/icons/icon-192.png' });
     }
     return;
@@ -57,39 +57,84 @@ function showNotification(title: string, body: string, tag: string): void {
     })
     .catch(() => {
       // If service worker not ready, fall back to direct Notification
-      if (Notification.permission === 'granted') {
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
         new Notification(title, { body, tag });
       }
     });
 }
 
+export type DoseSchedulerPatch = Partial<
+  Omit<DoseLogDocument, 'id' | 'patientId' | 'createdAt'>
+>;
+
+export interface UseReminderSchedulerOptions {
+  isDemoSession?: boolean | undefined;
+  onDemoDoseUpdate?: ((doseId: string, patch: DoseSchedulerPatch) => void) | undefined;
+}
+
 export function useReminderScheduler(
   doses: DoseLogDocument[],
-  patientId: string
+  patientId: string,
+  options?: UseReminderSchedulerOptions
 ): void {
+  const isDemoSession = Boolean(options?.isDemoSession);
   // Map of doseId → array of timer IDs to clear on re-schedule or unmount
   const timerMap = useRef<Map<string, ReturnType<typeof setTimeout>[]>>(new Map());
+  const dosesRef = useRef<DoseLogDocument[]>(doses);
+  const isDemoSessionRef = useRef<boolean>(isDemoSession);
+  const onDemoDoseUpdateRef = useRef<UseReminderSchedulerOptions['onDemoDoseUpdate']>(
+    options?.onDemoDoseUpdate
+  );
 
   useEffect(() => {
+    dosesRef.current = doses;
+  }, [doses]);
+
+  useEffect(() => {
+    isDemoSessionRef.current = isDemoSession;
+    onDemoDoseUpdateRef.current = options?.onDemoDoseUpdate;
+  }, [isDemoSession, options?.onDemoDoseUpdate]);
+
+  useEffect(() => {
+    const activeTimerMap = timerMap.current;
+    dosesRef.current = doses;
+    isDemoSessionRef.current = isDemoSession;
+
+    // Clear all existing timers before re-scheduling or when doses become empty
+    for (const timers of activeTimerMap.values()) {
+      timers.forEach(clearTimeout);
+    }
+    activeTimerMap.clear();
+
     // Don't schedule if no doses or no patientId
     if (!patientId || doses.length === 0) return;
 
     // Request notification permission on first dose load
     void ensureNotificationPermission();
 
-    const now = Date.now();
+    const readLatestDose = async (doseId: string): Promise<DoseLogDocument | null> => {
+      if (isDemoSessionRef.current) {
+        return dosesRef.current.find((d) => d.id === doseId) ?? null;
+      }
+      return getDoseLog(doseId).catch(() => null);
+    };
 
-    // Clear all existing timers before re-scheduling (doses list changed)
-    for (const timers of timerMap.current.values()) {
-      timers.forEach(clearTimeout);
-    }
-    timerMap.current.clear();
+    const writeDosePatch = (doseId: string, patch: DoseSchedulerPatch): void => {
+      if (isDemoSessionRef.current) {
+        onDemoDoseUpdateRef.current?.(doseId, patch);
+        return;
+      }
+      void updateDoseLog(doseId, patch).catch(() => null);
+    };
+
+    const now = Date.now();
 
     for (const dose of doses) {
       // Skip terminal states
       if (dose.status === 'taken' || dose.status === 'missed') continue;
 
       const scheduledMs = dose.scheduledTime.toMillis();
+      const escalationMs = scheduledMs + ESCALATION_OFFSET_MS;
       const timers: ReturnType<typeof setTimeout>[] = [];
 
       // ── T+0  Initial "due" notification ───────────────────────────────────
@@ -102,25 +147,32 @@ export function useReminderScheduler(
               `${dose.dosage} — please take now.`,
               `due-${dose.id}`
             );
-            // Update status to 'due' in Firestore (idempotent — cloud function did this before)
-            void updateDoseLog(dose.id, { status: 'due' }).catch(() => null);
+            writeDosePatch(dose.id, { status: 'due' });
           }, dueDelay)
         );
       } else if (dose.status === 'scheduled' && dueDelay <= 0) {
         // Already past due time but not yet marked — fix it immediately
-        void updateDoseLog(dose.id, { status: 'due' }).catch(() => null);
+        writeDosePatch(dose.id, { status: 'due' });
       }
 
       // ── T+15m  Gentle follow-up reminder ─────────────────────────────────
-      if (!dose.followUpSent) {
+      if (!dose.followUpSent && dose.status !== 'unconfirmed') {
         const gentleMs = scheduledMs + GENTLE_REMINDER_OFFSET_MS;
         const gentleDelay = gentleMs - now;
         if (gentleDelay > 0) {
           timers.push(
             setTimeout(async () => {
-              // Re-check: skip if user already took the dose
-              const fresh = await getDoseLog(dose.id).catch(() => null);
-              if (!fresh || fresh.status === 'taken' || fresh.status === 'missed') return;
+              // Re-check: skip if user already took the dose or already escalated
+              const fresh = await readLatestDose(dose.id);
+              if (
+                !fresh ||
+                fresh.status === 'taken' ||
+                fresh.status === 'missed' ||
+                fresh.status === 'unconfirmed' ||
+                fresh.followUpSent
+              ) {
+                return;
+              }
 
               // Respect active snooze
               if (fresh.status === 'snoozed' && fresh.snoozeUntil) {
@@ -133,31 +185,35 @@ export function useReminderScheduler(
                 `You haven't confirmed ${dose.dosage} yet. Please take or snooze.`,
                 `gentle-${dose.id}`
               );
-              void updateDoseLog(dose.id, { followUpSent: true }).catch(() => null);
+              writeDosePatch(dose.id, { followUpSent: true });
             }, gentleDelay)
           );
         }
       }
 
-      // ── T+30m  Escalation ─────────────────────────────────────────────────
-      if (!dose.escalationAlertSent) {
-        const escalationMs = scheduledMs + ESCALATION_OFFSET_MS;
+      // ── T+30m  Escalation (sets status: 'unconfirmed' ONLY; backend sends FCM & sets escalationAlertSent) ──
+      if (!dose.escalationAlertSent && dose.status !== 'unconfirmed') {
         const escalationDelay = escalationMs - now;
         if (escalationDelay > 0) {
           timers.push(
             setTimeout(async () => {
-              const fresh = await getDoseLog(dose.id).catch(() => null);
-              if (!fresh || fresh.status === 'taken' || fresh.status === 'missed') return;
+              const fresh = await readLatestDose(dose.id);
+              if (
+                !fresh ||
+                fresh.status === 'taken' ||
+                fresh.status === 'missed' ||
+                fresh.status === 'unconfirmed' ||
+                fresh.escalationAlertSent
+              ) {
+                return;
+              }
 
               showNotification(
                 `🚨 URGENT: ${dose.medicationName} not taken`,
-                `${dose.dosage} has not been confirmed. Your caregiver has been alerted.`,
+                `${dose.dosage} has not been confirmed. Escalating to your caregiver.`,
                 `escalation-${dose.id}`
               );
-              void updateDoseLog(dose.id, {
-                status: 'unconfirmed',
-                escalationAlertSent: true,
-              }).catch(() => null);
+              writeDosePatch(dose.id, { status: 'unconfirmed' });
             }, escalationDelay)
           );
         }
@@ -167,7 +223,7 @@ export function useReminderScheduler(
       if (dose.status === 'snoozed' && dose.snoozeUntil) {
         const snoozeExpiresMs = dose.snoozeUntil.toMillis();
         const snoozeExpiredDelay = snoozeExpiresMs - now;
-        // Also compute when snooze+15m gentle reminder would fire
+        // Also compute when snooze+10m post-snooze gentle reminder would fire
         const postSnoozeGentleDelay = snoozeExpiresMs + SNOOZE_DURATION_MS - now;
 
         if (snoozeExpiredDelay > 0) {
@@ -178,32 +234,44 @@ export function useReminderScheduler(
                 `${dose.dosage} — ready to take now.`,
                 `snooze-expired-${dose.id}`
               );
-              void updateDoseLog(dose.id, { status: 'due' }).catch(() => null);
+              writeDosePatch(dose.id, { status: 'due', snoozeUntil: null });
             }, snoozeExpiredDelay)
           );
+        } else if (now < escalationMs) {
+          // Snooze expired while tab was inactive before T+30m escalation
+          writeDosePatch(dose.id, { status: 'due', snoozeUntil: null });
         }
 
-        if (!dose.followUpSent && postSnoozeGentleDelay > 0) {
+        if (!dose.followUpSent && postSnoozeGentleDelay > 0 && snoozeExpiresMs + SNOOZE_DURATION_MS < escalationMs) {
           timers.push(
-            setTimeout(() => {
-              void updateDoseLog(dose.id, { followUpSent: true }).catch(() => null);
+            setTimeout(async () => {
+              const fresh = await readLatestDose(dose.id);
+              if (
+                !fresh ||
+                fresh.status === 'taken' ||
+                fresh.status === 'missed' ||
+                fresh.status === 'unconfirmed' ||
+                fresh.followUpSent
+              ) {
+                return;
+              }
+              writeDosePatch(dose.id, { followUpSent: true });
             }, postSnoozeGentleDelay)
           );
         }
       }
 
       if (timers.length > 0) {
-        timerMap.current.set(dose.id, timers);
+        activeTimerMap.set(dose.id, timers);
       }
     }
 
     // Cleanup: clear all timers when doses change or component unmounts
     return () => {
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      for (const timers of timerMap.current.values()) {
+      for (const timers of activeTimerMap.values()) {
         timers.forEach(clearTimeout);
       }
-      timerMap.current.clear();
+      activeTimerMap.clear();
     };
-  }, [doses, patientId]);
+  }, [doses, patientId, isDemoSession]);
 }

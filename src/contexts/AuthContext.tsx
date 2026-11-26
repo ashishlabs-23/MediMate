@@ -24,6 +24,8 @@ export interface AuthContextValue {
   updateAccessibilityPreferences?:
     | ((patch: Partial<AccessibilityPreferences>) => Promise<void>)
     | undefined;
+  /** Re-fetches and hydrates the current user's Firestore profile. */
+  refreshUserProfile?: (() => Promise<void>) | undefined;
 }
 
 // eslint-disable-next-line react-refresh/only-export-components

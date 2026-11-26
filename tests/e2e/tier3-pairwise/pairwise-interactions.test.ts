@@ -78,16 +78,15 @@ describe('Tier 3 — Cross-Feature Pairwise Interactions (T3-PAIR-01 .. T3-PAIR-
     expect(reDueResult.sendGentleReminder).toBe(true);
     expect(sim.getDose().snoozeCount).toBe(1);
 
-    // 4. Advance to T+30m (08:30:00Z) without taken action -> unconfirmed escalation
+    // 4. Advance to T+30m (08:30:00Z) without taken action -> client marks unconfirmed without escalationAlertSent (R1)
     timeTravel.advanceToEscalation(scheduledT);
     const escalationResult = sim.tick();
     expect(escalationResult.nextStatus).toBe('unconfirmed');
     expect(escalationResult.sendEscalationAlert).toBe(true);
     expect(sim.getDose().status).toBe('unconfirmed');
-    expect(sim.getDose().escalationAlertSent).toBe(true);
-    expect(sim.getDose().escalatedAt?.getTime()).toBe(
-      new Date('2026-11-25T08:30:00.000Z').getTime()
-    );
+    expect(sim.getDose().snoozeUntil).toBeNull();
+    expect(sim.getDose().escalationAlertSent).toBe(false);
+    expect(sim.getDose().escalatedAt).toBeNull();
 
     timeTravel.reset();
   });
@@ -744,14 +743,13 @@ describe('Tier 3 — Cross-Feature Pairwise Interactions (T3-PAIR-01 .. T3-PAIR-
     timeTravel.advanceToEscalation(scheduledT);
     const result = sim.tick();
 
-    // Safety invariant: T+30m escalation overrides remaining snooze window
+    // Safety invariant: T+30m escalation overrides remaining snooze window;
+    // R1: client marks status: 'unconfirmed' with snoozeUntil: null without setting escalationAlertSent: true
     expect(result.nextStatus).toBe('unconfirmed');
     expect(result.sendEscalationAlert).toBe(true);
     expect(sim.getDose().status).toBe('unconfirmed');
-    expect(sim.getDose().escalationAlertSent).toBe(true);
-    expect(sim.getDose().escalatedAt?.getTime()).toBe(
-      new Date('2026-11-25T08:30:00.000Z').getTime()
-    );
+    expect(sim.getDose().escalationAlertSent).toBe(false);
+    expect(sim.getDose().escalatedAt).toBeNull();
     expect(sim.getDose().snoozeUntil).toBeNull();
 
     timeTravel.reset();

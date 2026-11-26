@@ -9,6 +9,7 @@
  *   signOut                      — async function to sign out.
  *   loginAsDemo                  — immediate demo persona login with localStorage preference hydration.
  *   updateAccessibilityPreferences — optimistic + localStorage + best-effort Firestore preference updater.
+ *   refreshUserProfile           — re-fetches and hydrates the current user's Firestore profile.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -85,6 +86,7 @@ export function useAuth(): AuthContextValue {
   const isDemoRef = useRef(false);
   const firebaseUserRef = useRef<User | null | undefined>(undefined);
   const userProfileRef = useRef<UserDocument | null>(null);
+  const profileFetchSeqRef = useRef(0);
 
   useEffect(() => {
     isMounted.current = true;
@@ -111,9 +113,15 @@ export function useAuth(): AuthContextValue {
             firebaseUserRef.current = user;
             setFirebaseUser(user);
 
+            const seq = ++profileFetchSeqRef.current;
             try {
               const profile = await getUserDocument(user.uid);
-              if (isMounted.current && firebaseUserRef.current?.uid === user.uid) {
+              if (
+                isMounted.current &&
+                !isDemoRef.current &&
+                firebaseUserRef.current?.uid === user.uid &&
+                profileFetchSeqRef.current === seq
+              ) {
                 if (profile) {
                   const mergedPrefs = mergeStoredA11yPrefs(
                     user.uid,
@@ -131,12 +139,18 @@ export function useAuth(): AuthContextValue {
                 }
               }
             } catch {
-              if (isMounted.current && firebaseUserRef.current?.uid === user.uid) {
+              if (
+                isMounted.current &&
+                !isDemoRef.current &&
+                firebaseUserRef.current?.uid === user.uid &&
+                profileFetchSeqRef.current === seq
+              ) {
                 userProfileRef.current = null;
                 setUserProfile(null);
               }
             }
           } else if (!isDemoRef.current) {
+            profileFetchSeqRef.current += 1;
             isDemoRef.current = false;
             setIsDemo(false);
             firebaseUserRef.current = null;
@@ -171,6 +185,7 @@ export function useAuth(): AuthContextValue {
   }, []);
 
   const signOut = useCallback(async (): Promise<void> => {
+    profileFetchSeqRef.current += 1;
     isDemoRef.current = false;
     setIsDemo(false);
     try {
@@ -185,6 +200,7 @@ export function useAuth(): AuthContextValue {
   }, []);
 
   const loginAsDemo = useCallback((role: UserRole): void => {
+    profileFetchSeqRef.current += 1;
     const mockUid = role === 'caregiver' ? 'caregiver_priya' : 'patient_ramesh';
     const displayName = role === 'caregiver' ? 'Priya Sharma' : 'Ramesh Sharma';
     const mockUser = {
@@ -215,8 +231,56 @@ export function useAuth(): AuthContextValue {
     setIsLoading(false);
   }, []);
 
+  const refreshUserProfile = useCallback(async (): Promise<void> => {
+    const activeUser = firebaseUserRef.current ?? auth?.currentUser ?? null;
+    if (!activeUser || isDemoRef.current || isDemoUid(activeUser.uid)) {
+      return;
+    }
+
+    if (!firebaseUserRef.current) {
+      firebaseUserRef.current = activeUser;
+      if (isMounted.current) {
+        setFirebaseUser(activeUser);
+        setIsDemo(false);
+        setIsLoading(false);
+      }
+    }
+
+    const seq = ++profileFetchSeqRef.current;
+    try {
+      const profile = await getUserDocument(activeUser.uid);
+      if (
+        !isMounted.current ||
+        isDemoRef.current ||
+        firebaseUserRef.current?.uid !== activeUser.uid ||
+        profileFetchSeqRef.current !== seq
+      ) {
+        return;
+      }
+
+      if (profile) {
+        const mergedPrefs = mergeStoredA11yPrefs(
+          activeUser.uid,
+          profile.accessibilityPreferences ?? DEFAULT_ACCESSIBILITY_PREFERENCES
+        );
+        const hydratedProfile: UserDocument = {
+          ...profile,
+          accessibilityPreferences: mergedPrefs,
+        };
+        userProfileRef.current = hydratedProfile;
+        setUserProfile(hydratedProfile);
+      } else {
+        userProfileRef.current = null;
+        setUserProfile(null);
+      }
+    } catch (err) {
+      console.warn('Failed to refresh user profile:', err);
+    }
+  }, []);
+
   const updateAccessibilityPreferences = useCallback(
     async (patch: Partial<AccessibilityPreferences>): Promise<void> => {
+      profileFetchSeqRef.current += 1;
       const currentProfile = userProfileRef.current;
       const uid = currentProfile?.uid ?? firebaseUserRef.current?.uid ?? '';
       const base = currentProfile?.accessibilityPreferences ?? DEFAULT_ACCESSIBILITY_PREFERENCES;
@@ -264,5 +328,6 @@ export function useAuth(): AuthContextValue {
     signOut,
     loginAsDemo,
     updateAccessibilityPreferences,
+    refreshUserProfile,
   };
 }

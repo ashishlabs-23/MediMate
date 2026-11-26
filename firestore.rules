@@ -22,11 +22,6 @@ service cloud.firestore {
       return isAuthed() && uid() == patientId;
     }
 
-    // Returns true for demo/academic evaluation records (patient_ramesh)
-    function isDemoPatient(patientId) {
-      return patientId == 'patient_ramesh';
-    }
-
     // Returns true when an active care_circles document exists that links
     // the requesting user (as caregiver) to the given patientId.
     function isCaregiverFor(patientId) {
@@ -35,39 +30,100 @@ service cloud.firestore {
         && uid() in get(/databases/$(database)/documents/care_circles/$(patientId)).data.caregiverIds;
     }
 
-    // A user may access their own records, linked caregiver records, or demo evaluation records.
+    // A user may access their own records or linked caregiver records.
     function canAccessPatient(patientId) {
-      return isDemoPatient(patientId) || isSelf(patientId) || isCaregiverFor(patientId);
+      return isSelf(patientId) || isCaregiverFor(patientId);
+    }
+
+    // Validates controlled self-join onto care_circles/{patientId} using an active care_invites/{code} doc.
+    function isValidCaregiverSelfJoin(patientId) {
+      return isAuthed()
+        && resource != null
+        && uid() != patientId
+        && resource.data.caregiverIds is list
+        && request.resource.data.caregiverIds is list
+        && !(uid() in resource.data.caregiverIds)
+        && request.resource.data.patientId == resource.data.patientId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+             'caregiverIds',
+             'members',
+             'lastRedeemedInviteCode',
+             'updatedAt'
+           ])
+        && request.resource.data.lastRedeemedInviteCode is string
+        && exists(/databases/$(database)/documents/care_invites/$(request.resource.data.lastRedeemedInviteCode))
+        && get(/databases/$(database)/documents/care_invites/$(request.resource.data.lastRedeemedInviteCode)).data.active == true
+        && get(/databases/$(database)/documents/care_invites/$(request.resource.data.lastRedeemedInviteCode)).data.patientId == patientId
+        && request.resource.data.caregiverIds.hasAll(resource.data.caregiverIds)
+        && request.resource.data.caregiverIds.size() == resource.data.caregiverIds.size() + 1
+        && uid() in request.resource.data.caregiverIds;
     }
 
     // =========================================================================
     // /users/{userId}
     // =========================================================================
     match /users/{userId} {
-      allow read: if isDemoPatient(userId) || (isAuthed() && (uid() == userId || isCaregiverFor(userId)));
+      allow read: if isAuthed() && (uid() == userId || isCaregiverFor(userId));
 
-      allow create: if isDemoPatient(userId) || (isAuthed() && uid() == userId && request.resource.data.uid == userId);
+      allow create: if isAuthed()
+        && uid() == userId
+        && request.resource.data.uid == userId;
 
-      allow update: if isDemoPatient(userId) || (isAuthed()
+      allow update: if isAuthed()
+        && resource != null
         && uid() == userId
         && request.resource.data.uid == userId
-        && !(resource.data.role == 'elderly' && request.resource.data.role != 'elderly'));
+        && !(('role' in resource.data) && resource.data.role == 'elderly' && request.resource.data.role != 'elderly');
 
       allow delete: if false;
+    }
+
+    // =========================================================================
+    // /care_invites/{inviteCode}
+    // =========================================================================
+    match /care_invites/{inviteCode} {
+      // Single-code lookup by authenticated users; enumeration via list/query is forbidden.
+      allow get: if isAuthed();
+      allow list: if false;
+
+      allow create: if isAuthed()
+        && request.resource.data.code == inviteCode
+        && request.resource.data.patientId is string
+        && request.resource.data.active is bool
+        && (request.resource.data.patientId == uid() || isCaregiverFor(request.resource.data.patientId));
+
+      allow update: if isAuthed()
+        && resource != null
+        && request.resource.data.code == inviteCode
+        && request.resource.data.patientId == resource.data.patientId
+        && request.resource.data.active is bool
+        && (resource.data.patientId == uid() || isCaregiverFor(resource.data.patientId));
+
+      allow delete: if isAuthed()
+        && resource != null
+        && (resource.data.patientId == uid() || isCaregiverFor(resource.data.patientId));
     }
 
     // =========================================================================
     // /care_circles/{patientId}
     // =========================================================================
     match /care_circles/{patientId} {
-      allow read: if isDemoPatient(patientId) || (isAuthed() && (uid() == patientId || (resource != null && uid() in resource.data.caregiverIds)));
+      allow read: if isAuthed()
+        && (uid() == patientId || (resource != null && uid() in resource.data.caregiverIds));
 
-      allow create: if isDemoPatient(patientId) || (isAuthed() && uid() == patientId && request.resource.data.patientId == patientId);
+      allow create: if isAuthed()
+        && uid() == patientId
+        && request.resource.data.patientId == patientId
+        && request.resource.data.caregiverIds is list;
 
-      allow update: if isDemoPatient(patientId) || (isAuthed()
+      allow update: if isAuthed()
         && resource != null
-        && (uid() == patientId || uid() in resource.data.caregiverIds)
-        && request.resource.data.patientId == resource.data.patientId);
+        && request.resource.data.patientId == resource.data.patientId
+        && (
+          uid() == patientId
+          || uid() in resource.data.caregiverIds
+          || isValidCaregiverSelfJoin(patientId)
+        );
 
       allow delete: if isAuthed() && uid() == patientId;
     }
@@ -76,36 +132,45 @@ service cloud.firestore {
     // /medications/{medicationId}
     // =========================================================================
     match /medications/{medicationId} {
-      allow read: if isDemoPatient(resource.data.patientId) || (isAuthed() && resource != null && canAccessPatient(resource.data.patientId));
+      allow read: if isAuthed()
+        && resource != null
+        && canAccessPatient(resource.data.patientId);
 
-      allow create: if isDemoPatient(request.resource.data.patientId) || (isAuthed() && request.resource.data.patientId is string && canAccessPatient(request.resource.data.patientId));
+      allow create: if isAuthed()
+        && request.resource.data.patientId is string
+        && canAccessPatient(request.resource.data.patientId);
 
-      allow update: if isDemoPatient(resource.data.patientId) || (isAuthed()
+      allow update: if isAuthed()
         && resource != null
         && canAccessPatient(resource.data.patientId)
-        && request.resource.data.patientId == resource.data.patientId);
+        && request.resource.data.patientId == resource.data.patientId;
 
-      allow delete: if isAuthed() && resource != null && canAccessPatient(resource.data.patientId);
+      allow delete: if isAuthed()
+        && resource != null
+        && canAccessPatient(resource.data.patientId);
     }
 
     // =========================================================================
     // /dose_logs/{doseLogId}
     // =========================================================================
     match /dose_logs/{doseLogId} {
-      allow read: if isDemoPatient(resource.data.patientId) || (isAuthed() && resource != null && canAccessPatient(resource.data.patientId));
+      allow read: if isAuthed()
+        && resource != null
+        && canAccessPatient(resource.data.patientId);
 
-      allow create: if isDemoPatient(request.resource.data.patientId) || (isAuthed()
+      allow create: if isAuthed()
         && request.resource.data.patientId is string
         && canAccessPatient(request.resource.data.patientId)
-        && request.resource.data.snoozeCount == 0);
+        && request.resource.data.snoozeCount == 0;
 
-      allow update: if isDemoPatient(resource.data.patientId) || (isAuthed()
+      allow update: if isAuthed()
         && resource != null
         && canAccessPatient(resource.data.patientId)
         && request.resource.data.patientId == resource.data.patientId
-        && !(resource.data.status == 'taken' && request.resource.data.status != 'taken')
+        && resource.data.status != 'taken'
+        && request.resource.data.snoozeCount is int
         && request.resource.data.snoozeCount >= resource.data.snoozeCount
-        && request.resource.data.snoozeCount <= 1);
+        && request.resource.data.snoozeCount <= 1;
 
       allow delete: if false;
     }

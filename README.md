@@ -14,6 +14,7 @@ A digital medication companion that helps older adults manage their prescribed m
 | Auth & DB | Firebase Auth + Firestore |
 | Push Notifications | Firebase Cloud Messaging (FCM) |
 | Backend Logic | Firebase Cloud Functions v2 (Node 20) |
+| Automation Backend | Node 20 + Express + node-cron (Render) |
 | PWA | Vite PWA Plugin + Web Manifest + FCM Service Worker |
 | Testing | Vitest (34 unit + 123 E2E = 157 tests) |
 
@@ -105,7 +106,11 @@ scheduled → due → taken ✓
 # Deploy Firestore security rules
 npx firebase-tools deploy --only firestore:rules --project medimate-e27da
 
-# Deploy Cloud Functions
+# Deploy Firestore composite indexes
+npx firebase-tools deploy --only firestore:indexes --project medimate-e27da
+
+# Build and deploy Cloud Functions
+cd functions && npm run build && cd ..
 npx firebase-tools deploy --only functions --project medimate-e27da
 
 # Deploy hosting (after npm run build)
@@ -115,14 +120,17 @@ npx firebase-tools deploy --only hosting --project medimate-e27da
 npx firebase-tools deploy --project medimate-e27da
 ```
 
+> **Render Backend & Keep-Alive**: See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for Render deployment, `/ping` keep-alive setup, `CRON_SECRET` configuration, and `gcloud scheduler` HTTP job commands.
+
 ---
 
-## Cloud Functions
+## Cloud Functions & Scheduled Jobs
 
 | Function | Schedule | Purpose |
 |---|---|---|
-| `generateDailyDoseLogs` | Daily 18:30 UTC (= 00:00 IST) | Idempotently pre-populates today's dose log documents for all active medications |
-| `checkDueDosesAndEscalate` | Every 5 minutes | Transitions dose states, sends FCM alerts at T (initial), T+15m (gentle), T+30m (escalation to patient + caregivers) |
+| `generateDailyDoseLogs` | Every 30 min (`0,30 * * * *` UTC) | Runs the per-patient IANA timezone midnight cycle: closes past-midnight unresolved doses to `missed` and idempotently pre-populates today's `dose_logs` |
+| `closeMissedDoses` | Every 30 min (`0,30 * * * *` UTC) | Transitions unresolved past-midnight doses (`scheduled`, `due`, `snoozed`, `unconfirmed`) to `missed` with `missedAt` for patient timezones in local hour `00` |
+| `checkDueDosesAndEscalate` | Every 5 minutes (`*/5 * * * *` UTC) | Bounded 48-hour lookback scan that transitions dose states and sends FCM alerts at T (initial), T+15m (gentle), and T+30m (escalation to patient + caregivers) |
 
 ---
 
@@ -130,10 +138,10 @@ npx firebase-tools deploy --project medimate-e27da
 
 | Collection | Purpose |
 |---|---|
-| `users/{uid}` | User profile, role (`elderly`/`caregiver`), FCM tokens |
+| `users/{uid}` | User profile, role (`elderly`/`caregiver`), IANA `timezone` (default `Asia/Kolkata`), FCM tokens |
 | `care_circles/{patientId}` | Links caregivers to a patient |
 | `medications/{medicationId}` | Medication name, dosage, schedule |
-| `dose_logs/{doseLogId}` | Daily dose records, status, snooze/escalation tracking |
+| `dose_logs/{doseLogId}` | Daily dose records, status, snooze/escalation/missed tracking |
 
 ---
 
@@ -158,7 +166,12 @@ MediMate/
 │   ├── hooks/            # useAuth
 │   ├── components/       # DoseCard, StatusChip, AppShell, LoginScreen
 │   └── pages/            # TodayView (elderly), CaregiverDashboard
+├── server/               # Express + node-cron automation backend (Render)
+│   ├── src/jobs/         # Daily log generation, EOD closeout, escalation
+│   └── tests/            # Backend unit & integration tests
 ├── functions/src/        # Cloud Functions (v2 scheduled)
+├── docs/
+│   └── DEPLOYMENT.md     # Render, Cloud Scheduler & Firestore index deployment guide
 ├── tests/
 │   ├── unit/             # 34 unit tests
 │   └── e2e/              # 123 E2E tests (Tier 1–4)
@@ -166,6 +179,8 @@ MediMate/
 │   ├── manifest.json     # PWA manifest
 │   └── firebase-messaging-sw.js  # FCM service worker
 ├── firestore.rules       # Security rules
+├── firestore.indexes.json # Composite Firestore indexes
+├── render.yaml           # Render web service blueprint
 ├── firebase.json         # Firebase project config
 └── .env.example          # Environment variable template
 ```

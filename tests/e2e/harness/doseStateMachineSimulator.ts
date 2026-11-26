@@ -79,10 +79,8 @@ export class DoseStateMachineSimulator {
     if (result.sendGentleReminder) {
       this.dose.followUpSent = true;
     }
-    if (result.sendEscalationAlert) {
-      this.dose.escalationAlertSent = true;
-      this.dose.escalatedAt = result.escalatedAt ?? this.timeTravel.getCurrentTime();
-    }
+    // R1 client-side fix: client transitions status to 'unconfirmed' with snoozeUntil: null ONLY;
+    // backend/Functions escalation sets escalationAlertSent: true and escalatedAt after caregiver FCM.
     this.notify();
     return result;
   }
@@ -132,10 +130,7 @@ export class DoseStateMachineSimulator {
     this.dose.status = result.nextStatus;
     this.dose.snoozeCount = result.snoozeCount;
     this.dose.snoozeUntil = result.snoozeUntil ?? null;
-    if (result.sendEscalationAlert) {
-      this.dose.escalationAlertSent = true;
-      this.dose.escalatedAt = result.escalatedAt ?? this.timeTravel.getCurrentTime();
-    }
+    // R1 client-side fix: client NEVER sets escalationAlertSent: true or escalatedAt.
     this.notify();
     return result.nextStatus === 'snoozed';
   }

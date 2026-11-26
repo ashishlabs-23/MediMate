@@ -1,8 +1,9 @@
 /**
  * checkDueDosesAndEscalate — Cloud Function (Pub/Sub scheduled cron).
  *
- * Runs every 5 minutes. Evaluates all non-terminal dose_logs using the domain
- * state machine logic. Sends FCM alerts when T, T+15m, or T+30m thresholds pass.
+ * Runs every 5 minutes. Evaluates non-terminal dose_logs within the bounded
+ * 48-hour lookback window using the domain state machine logic. Sends FCM
+ * alerts when T, T+15m, or T+30m thresholds pass and cleans stale tokens.
  *
  * Uses Firebase Admin SDK — bypasses Firestore security rules.
  * Never fabricates push notification delivery success.
@@ -13,33 +14,93 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { logger } from 'firebase-functions';
 
 // Local state machine constants (mirror src/domain/intervals.ts for Cloud Functions isolation).
-const GENTLE_REMINDER_OFFSET_MS = 15 * 60 * 1000; // 15 min
-const ESCALATION_OFFSET_MS = 30 * 60 * 1000;       // 30 min
+export const GENTLE_REMINDER_OFFSET_MS = 15 * 60 * 1000; // 15 min
+export const ESCALATION_OFFSET_MS = 30 * 60 * 1000;      // 30 min
+export const ESCALATION_LOOKBACK_MS = 48 * 60 * 60 * 1000; // 48 hours
+export const BATCH_LIMIT = 500;
+export const FCM_MULTICAST_LIMIT = 500;
 
-type DoseStatus = 'scheduled' | 'due' | 'taken' | 'snoozed' | 'unconfirmed' | 'missed';
+const INVALID_TOKEN_CODES = new Set([
+  'messaging/registration-token-not-registered',
+  'messaging/invalid-registration-token',
+]);
 
-interface DoseLogData {
+export type DoseStatus = 'scheduled' | 'due' | 'taken' | 'snoozed' | 'unconfirmed' | 'missed';
+
+export interface DoseLogData {
   status: DoseStatus;
   patientId: string;
   medicationName: string;
   dosage: string;
-  scheduledTime: admin.firestore.Timestamp;
+  scheduledTime: admin.firestore.Timestamp | Date | { seconds: number; nanoseconds?: number };
   snoozeCount: number;
-  snoozeUntil?: admin.firestore.Timestamp | null;
+  snoozeUntil?: admin.firestore.Timestamp | Date | { seconds: number; nanoseconds?: number } | null;
   escalationAlertSent: boolean;
   followUpSent: boolean;
-  takenAt?: admin.firestore.Timestamp | null;
+  takenAt?: admin.firestore.Timestamp | Date | { seconds: number; nanoseconds?: number } | null;
 }
 
-interface FCMSendResult {
+export interface FCMSendResult {
   doseId: string;
   type: 'initial' | 'gentle' | 'escalation';
   success: boolean;
   error?: string;
 }
 
+export interface ProcessDueDosesResult {
+  escalatedIds: string[];
+  gentleReminderIds: string[];
+  initialReminderIds: string[];
+  fcmResults: FCMSendResult[];
+}
+
+function toMillis(value: unknown): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.getTime();
+  }
+  if (typeof value === 'object') {
+    const maybeTimestamp = value as {
+      toMillis?: unknown;
+      seconds?: unknown;
+      nanoseconds?: unknown;
+    };
+    if (typeof maybeTimestamp.toMillis === 'function') {
+      const ms = (maybeTimestamp as { toMillis: () => number }).toMillis();
+      return Number.isFinite(ms) ? ms : null;
+    }
+    if (typeof maybeTimestamp.seconds === 'number') {
+      const nanos =
+        typeof maybeTimestamp.nanoseconds === 'number'
+          ? maybeTimestamp.nanoseconds
+          : 0;
+      return Math.floor(maybeTimestamp.seconds * 1000 + nanos / 1e6);
+    }
+  }
+  return null;
+}
+
+function addTokensForOwner(
+  tokenOwners: Map<string, Set<string>>,
+  uid: string,
+  tokens: unknown
+): void {
+  if (!Array.isArray(tokens)) return;
+  for (const token of tokens) {
+    if (typeof token !== 'string' || token.length === 0) continue;
+    let owners = tokenOwners.get(token);
+    if (!owners) {
+      owners = new Set<string>();
+      tokenOwners.set(token, owners);
+    }
+    owners.add(uid);
+  }
+}
+
 export const checkDueDosesAndEscalate = onSchedule(
-  { schedule: '*/5 * * * *', timeZone: 'UTC' }, // every 5 minutes
+  { schedule: '*/5 * * * *', timeZone: 'UTC' },
   async (): Promise<void> => {
     const firestore = admin.firestore();
     const now = new Date();
@@ -50,184 +111,295 @@ export const checkDueDosesAndEscalate = onSchedule(
 
 /**
  * Core logic — extracted for testability.
+ * Evaluates non-terminal dose_logs within the 48-hour lookback window and commits
+ * updates in chunks <= 500, dispatching FCM notifications and cleaning stale tokens.
  */
 export async function processDueDoses(
   firestore: admin.firestore.Firestore,
-  now: Date
-): Promise<{
-  escalatedIds: string[];
-  gentleReminderIds: string[];
-  initialReminderIds: string[];
-  fcmResults: FCMSendResult[];
-}> {
+  now: Date = new Date(),
+  messaging: admin.messaging.Messaging | null | undefined = undefined
+): Promise<ProcessDueDosesResult> {
   const nowMs = now.getTime();
   const escalatedIds: string[] = [];
   const gentleReminderIds: string[] = [];
   const initialReminderIds: string[] = [];
   const fcmResults: FCMSendResult[] = [];
 
-  // Query only non-terminal doses to limit read load.
+  const cutoffTimestamp = admin.firestore.Timestamp.fromDate(
+    new Date(nowMs - ESCALATION_LOOKBACK_MS)
+  );
   const doseSnap = await firestore
     .collection('dose_logs')
-    .where('status', 'not-in', ['taken', 'missed'])
+    .where('status', 'in', ['scheduled', 'due', 'snoozed', 'unconfirmed'])
+    .where('scheduledTime', '>=', cutoffTimestamp)
     .get();
 
-  const batch = firestore.batch();
-  let batchCount = 0;
+  const pendingUpdates: Array<{
+    ref: admin.firestore.DocumentReference;
+    patch: Record<string, unknown>;
+  }> = [];
 
   for (const snap of doseSnap.docs) {
     const doseId = snap.id;
     const data = snap.data() as DoseLogData;
-    const scheduledMs = data.scheduledTime.toMillis();
+    const scheduledMs = toMillis(data.scheduledTime);
+    if (scheduledMs === null || nowMs < scheduledMs) {
+      continue;
+    }
+
     const gentleMs = scheduledMs + GENTLE_REMINDER_OFFSET_MS;
     const escalationMs = scheduledMs + ESCALATION_OFFSET_MS;
 
-    // Determine status transitions
-    if (nowMs < scheduledMs) {
-      // Not yet due — no action
-      continue;
-    }
+    // 1. T+30m escalation ceiling overrides scheduled, due, and active snoozed doses,
+    //    and triggers caregiver FCM even if the client already set status='unconfirmed'.
+    if (nowMs >= escalationMs) {
+      if (data.status !== 'unconfirmed' || !data.escalationAlertSent) {
+        const patch: Record<string, unknown> = {
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        if (data.status !== 'unconfirmed') {
+          patch.status = 'unconfirmed';
+          patch.snoozeUntil = null;
+        }
+        if (!data.escalationAlertSent) {
+          patch.escalationAlertSent = true;
+          patch.escalatedAt = admin.firestore.FieldValue.serverTimestamp();
+          escalatedIds.push(doseId);
 
-    const patch: Partial<DoseLogData> & { updatedAt: admin.firestore.FieldValue } = {
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
-
-    // --- T+30m escalation ---
-    if (nowMs >= escalationMs && data.status !== 'unconfirmed') {
-      patch.status = 'unconfirmed';
-      if (!data.escalationAlertSent) {
-        patch.escalationAlertSent = true;
-        (patch as Record<string, unknown>).escalatedAt = admin.firestore.FieldValue.serverTimestamp();
-        escalatedIds.push(doseId);
-
-        // Send escalation FCM alert
-        const fcmResult = await sendFCMAlert(firestore, data, 'escalation');
-        fcmResults.push({ doseId, type: 'escalation', ...fcmResult });
+          const fcmResult = await sendFCMAlert(firestore, messaging, doseId, data, 'escalation');
+          fcmResults.push({ doseId, type: 'escalation', ...fcmResult });
+        }
+        pendingUpdates.push({ ref: snap.ref, patch });
       }
-      batch.update(snap.ref, patch as Record<string, unknown>);
-      batchCount++;
       continue;
     }
 
-    // --- T (due) transition ---
+    // 2. Initial transition: scheduled -> due (also handles missed T+15m tick)
     if (data.status === 'scheduled') {
-      patch.status = 'due';
-      initialReminderIds.push(doseId);
-      const fcmResult = await sendFCMAlert(firestore, data, 'initial');
-      fcmResults.push({ doseId, type: 'initial', ...fcmResult });
-      batch.update(snap.ref, patch as Record<string, unknown>);
-      batchCount++;
+      const patch: Record<string, unknown> = {
+        status: 'due',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (nowMs >= gentleMs && !data.followUpSent) {
+        patch.followUpSent = true;
+        gentleReminderIds.push(doseId);
+        const fcmResult = await sendFCMAlert(firestore, messaging, doseId, data, 'gentle');
+        fcmResults.push({ doseId, type: 'gentle', ...fcmResult });
+      } else {
+        initialReminderIds.push(doseId);
+        const fcmResult = await sendFCMAlert(firestore, messaging, doseId, data, 'initial');
+        fcmResults.push({ doseId, type: 'initial', ...fcmResult });
+      }
+      pendingUpdates.push({ ref: snap.ref, patch });
       continue;
     }
 
-    // --- T+15m gentle reminder (for due / snoozed-expired) ---
-    if (nowMs >= gentleMs && !data.followUpSent) {
-      // Check snooze status
-      const snoozeUntilMs = data.snoozeUntil ? data.snoozeUntil.toMillis() : 0;
-      if (data.status === 'snoozed' && nowMs < snoozeUntilMs) {
-        // Still actively snoozed — wait for snooze to expire
+    // 3. Snoozed doses before T+30m: suppress while active, revert to due on expiry
+    if (data.status === 'snoozed') {
+      const snoozeUntilMs = toMillis(data.snoozeUntil);
+      if (snoozeUntilMs === null || nowMs < snoozeUntilMs) {
         continue;
       }
-      patch.followUpSent = true;
+
+      const patch: Record<string, unknown> = {
+        status: 'due',
+        snoozeUntil: null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      if (nowMs >= gentleMs && !data.followUpSent) {
+        patch.followUpSent = true;
+        gentleReminderIds.push(doseId);
+        const fcmResult = await sendFCMAlert(firestore, messaging, doseId, data, 'gentle');
+        fcmResults.push({ doseId, type: 'gentle', ...fcmResult });
+      } else {
+        initialReminderIds.push(doseId);
+        const fcmResult = await sendFCMAlert(firestore, messaging, doseId, data, 'initial');
+        fcmResults.push({ doseId, type: 'initial', ...fcmResult });
+      }
+      pendingUpdates.push({ ref: snap.ref, patch });
+      continue;
+    }
+
+    // 4. Due doses reaching T+15m gentle reminder
+    if (data.status === 'due' && nowMs >= gentleMs && !data.followUpSent) {
+      const patch: Record<string, unknown> = {
+        followUpSent: true,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
       gentleReminderIds.push(doseId);
-      const fcmResult = await sendFCMAlert(firestore, data, 'gentle');
+      const fcmResult = await sendFCMAlert(firestore, messaging, doseId, data, 'gentle');
       fcmResults.push({ doseId, type: 'gentle', ...fcmResult });
-      batch.update(snap.ref, patch as Record<string, unknown>);
-      batchCount++;
+      pendingUpdates.push({ ref: snap.ref, patch });
     }
   }
 
-  if (batchCount > 0) {
+  for (let i = 0; i < pendingUpdates.length; i += BATCH_LIMIT) {
+    const chunk = pendingUpdates.slice(i, i + BATCH_LIMIT);
+    const batch = firestore.batch();
+    for (const { ref, patch } of chunk) {
+      batch.update(ref, patch);
+    }
     await batch.commit();
   }
 
-  return { escalatedIds, gentleReminderIds, initialReminderIds, fcmResults };
+  return {
+    escalatedIds,
+    gentleReminderIds,
+    initialReminderIds,
+    fcmResults,
+  };
 }
 
 /**
- * Looks up the patient's FCM tokens and sends a push notification.
- * Returns success/error — NEVER fabricates delivery confirmation.
+ * Looks up patient (and caregiver on escalation) FCM tokens, dispatches multicast
+ * push in chunks <= 500, and removes unregistered/invalid tokens from users/{uid}.fcmTokens.
  */
 async function sendFCMAlert(
   firestore: admin.firestore.Firestore,
+  messagingArg: admin.messaging.Messaging | null | undefined,
+  doseId: string,
   dose: DoseLogData,
   type: 'initial' | 'gentle' | 'escalation'
 ): Promise<{ success: boolean; error?: string }> {
   try {
+    const tokenOwners = new Map<string, Set<string>>();
+
     const userSnap = await firestore.collection('users').doc(dose.patientId).get();
-    if (!userSnap.exists) {
-      return { success: false, error: 'Patient user document not found' };
+    if (userSnap.exists) {
+      const userData = userSnap.data() as { fcmTokens?: unknown };
+      addTokensForOwner(tokenOwners, dose.patientId, userData?.fcmTokens);
     }
 
-    const userData = userSnap.data() as { fcmTokens?: string[] };
-    const tokens: string[] = [...(userData.fcmTokens ?? [])];
-
-    // On escalation, also gather FCM tokens from linked caregivers in care_circles
     if (type === 'escalation') {
       const circleSnap = await firestore.collection('care_circles').doc(dose.patientId).get();
       if (circleSnap.exists) {
-        const circleData = circleSnap.data() as { caregiverIds?: string[] };
-        const caregiverIds = circleData.caregiverIds ?? [];
+        const circleData = circleSnap.data() as { caregiverIds?: unknown };
+        const caregiverIds = Array.isArray(circleData?.caregiverIds)
+          ? circleData.caregiverIds.filter((id: unknown): id is string => typeof id === 'string')
+          : [];
         for (const cgId of caregiverIds) {
           const cgSnap = await firestore.collection('users').doc(cgId).get();
           if (cgSnap.exists) {
-            const cgData = cgSnap.data() as { fcmTokens?: string[] };
-            if (cgData.fcmTokens) {
-              tokens.push(...cgData.fcmTokens);
-            }
+            const cgData = cgSnap.data() as { fcmTokens?: unknown };
+            addTokensForOwner(tokenOwners, cgId, cgData?.fcmTokens);
           }
         }
       }
     }
 
-    const uniqueTokens = Array.from(new Set(tokens));
+    if (!userSnap.exists && tokenOwners.size === 0) {
+      return { success: false, error: 'Patient user document not found' };
+    }
+
+    const uniqueTokens = Array.from(tokenOwners.keys());
     if (uniqueTokens.length === 0) {
       return { success: false, error: 'No FCM tokens registered for patient or caregivers' };
     }
 
-    const titleMap: Record<string, string> = {
-      initial: `💊 Time for ${dose.medicationName}`,
-      gentle: `⏰ Reminder: ${dose.medicationName} is overdue`,
-      escalation: `🚨 URGENT: ${dose.medicationName} not taken`,
+    const messaging = messagingArg === undefined ? admin.messaging() : messagingArg;
+    if (!messaging) {
+      return { success: false, error: 'FCM messaging not initialized' };
+    }
+
+    const titleMap: Record<'initial' | 'gentle' | 'escalation', string> = {
+      initial: `Time for ${dose.medicationName}`,
+      gentle: `Reminder: ${dose.medicationName} is overdue`,
+      escalation: `URGENT: ${dose.medicationName} not taken`,
     };
-    const bodyMap: Record<string, string> = {
+    const bodyMap: Record<'initial' | 'gentle' | 'escalation', string> = {
       initial: `${dose.dosage} — please take now.`,
       gentle: `You haven't confirmed ${dose.dosage} yet. Please take or snooze.`,
       escalation: `${dose.dosage} has not been confirmed. Your caregiver has been notified.`,
     };
 
-    const message: admin.messaging.MulticastMessage = {
-      tokens: uniqueTokens,
-      notification: {
-        title: titleMap[type] ?? `MediMate: ${dose.medicationName}`,
-        body: bodyMap[type] ?? 'Please check your medications.',
-      },
-      data: {
-        type,
-        medicationName: dose.medicationName,
-        dosage: dose.dosage,
-      },
-      android: {
-        priority: type === 'escalation' ? 'high' : 'normal',
-      },
-      apns: {
-        payload: {
-          aps: {
-            sound: 'default',
-            badge: 1,
+    let totalSuccessCount = 0;
+    let totalFailedCount = 0;
+    const badTokensByUid = new Map<string, Set<string>>();
+
+    for (let i = 0; i < uniqueTokens.length; i += FCM_MULTICAST_LIMIT) {
+      const tokenChunk = uniqueTokens.slice(i, i + FCM_MULTICAST_LIMIT);
+      const message: admin.messaging.MulticastMessage = {
+        tokens: tokenChunk,
+        notification: {
+          title: titleMap[type],
+          body: bodyMap[type],
+        },
+        data: {
+          type,
+          doseId,
+          medicationName: dose.medicationName,
+          dosage: dose.dosage,
+        },
+        android: {
+          priority: type === 'escalation' ? 'high' : 'normal',
+        },
+        apns: {
+          payload: {
+            aps: {
+              sound: 'default',
+              badge: 1,
+            },
           },
         },
-      },
-    };
+      };
 
-    const response = await admin.messaging().sendEachForMulticast(message);
-    const failedCount = response.responses.filter((r) => !r.success).length;
+      const response = await messaging.sendEachForMulticast(message);
+      totalSuccessCount += response.successCount;
 
-    if (failedCount > 0) {
-      logger.warn(`FCM: ${failedCount}/${tokens.length} tokens failed for dose ${dose.medicationName}`);
+      response.responses.forEach((resp: admin.messaging.SendResponse, idx: number) => {
+        if (!resp.success) {
+          totalFailedCount += 1;
+          const errorCode = resp.error?.code;
+          if (errorCode && INVALID_TOKEN_CODES.has(errorCode)) {
+            const badToken = tokenChunk[idx];
+            const owners = tokenOwners.get(badToken);
+            if (owners) {
+              for (const uid of owners) {
+                let badSet = badTokensByUid.get(uid);
+                if (!badSet) {
+                  badSet = new Set<string>();
+                  badTokensByUid.set(uid, badSet);
+                }
+                badSet.add(badToken);
+              }
+            }
+          }
+        }
+      });
     }
 
-    return { success: response.successCount > 0 };
+    if (totalFailedCount > 0) {
+      logger.warn(
+        `FCM: ${totalFailedCount}/${uniqueTokens.length} tokens failed for dose ${doseId}`
+      );
+    }
+
+    for (const [uid, badTokensSet] of badTokensByUid.entries()) {
+      const badTokens = Array.from(badTokensSet);
+      try {
+        await firestore
+          .collection('users')
+          .doc(uid)
+          .update({
+            fcmTokens: admin.firestore.FieldValue.arrayRemove(...badTokens),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+      } catch (cleanupErr) {
+        const cleanupMsg =
+          cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+        logger.warn(
+          `Failed to clean stale FCM tokens for user ${uid}: ${cleanupMsg}`
+        );
+      }
+    }
+
+    return {
+      success: totalSuccessCount > 0,
+      ...(totalFailedCount > 0 && totalSuccessCount === 0
+        ? { error: 'All FCM token deliveries failed' }
+        : {}),
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.error(`FCM send failed: ${message}`);

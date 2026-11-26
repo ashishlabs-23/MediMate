@@ -546,14 +546,14 @@ export function createDoseService(
       });
 
       if (result.nextStatus === 'unconfirmed') {
+        // R1 client-side fix: at T+30m client writes status: 'unconfirmed' & snoozeUntil: null ONLY;
+        // backend/Functions escalation sends caregiver FCM and sets escalationAlertSent: true / escalatedAt.
         db.updateDoc<DoseLogDocument>(
           'dose_logs',
           doseLogId,
           {
             status: 'unconfirmed',
             snoozeUntil: null,
-            escalatedAt: result.escalatedAt ?? now,
-            escalationAlertSent: true,
             updatedAt: now,
           },
           auth

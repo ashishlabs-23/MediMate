@@ -1,4 +1,9 @@
-export type CollectionName = 'users' | 'care_circles' | 'medications' | 'dose_logs';
+export type CollectionName =
+  | 'users'
+  | 'care_circles'
+  | 'care_invites'
+  | 'medications'
+  | 'dose_logs';
 
 export type UserRole = 'elderly' | 'caregiver' | 'dual';
 
@@ -67,6 +72,7 @@ export class MockFirestoreDb {
   private stores: Record<CollectionName, Map<string, FirestoreRecord>> = {
     users: new Map(),
     care_circles: new Map(),
+    care_invites: new Map(),
     medications: new Map(),
     dose_logs: new Map(),
   };
@@ -231,6 +237,9 @@ export class MockFirestoreDb {
         const caregivers = Array.isArray(doc.caregiverIds) ? doc.caregiverIds : [];
         return patientId === auth.uid || caregivers.some((id) => id === auth.uid);
       }
+      case 'care_invites': {
+        return true;
+      }
       case 'medications':
       case 'dose_logs': {
         const patientId = typeof doc.patientId === 'string' ? doc.patientId : '';
@@ -267,6 +276,10 @@ export class MockFirestoreDb {
     targetPatientId?: string
   ): T[] {
     this.assertAuthenticated(auth);
+
+    if (collection === 'care_invites') {
+      throw new PermissionDeniedError('Listing care_invites is forbidden (allow list: if false)');
+    }
 
     if (targetPatientId) {
       if (!this.isCaregiverFor(auth.uid, targetPatientId)) {
@@ -322,23 +335,86 @@ export class MockFirestoreDb {
         } else {
           const existingPatientId = typeof existing.patientId === 'string' ? existing.patientId : '';
           const existingCaregivers = Array.isArray(existing.caregiverIds) ? existing.caregiverIds : [];
-          if (existingPatientId !== auth.uid && !existingCaregivers.some((id) => id === auth.uid)) {
-            throw new PermissionDeniedError('Unauthorized care_circles update');
-          }
-          if (patientId && patientId !== existingPatientId) {
-            throw new PermissionDeniedError('Cannot reassign care circle patientId');
-          }
-          if (auth.uid !== existingPatientId) {
-            const membershipChanged =
-              JSON.stringify(existing.caregiverIds ?? []) !== JSON.stringify(data.caregiverIds ?? []) ||
-              JSON.stringify(existing.members ?? []) !== JSON.stringify(data.members ?? []) ||
-              JSON.stringify((existing as Record<string, unknown>).primaryCaregiverIds ?? []) !==
-                JSON.stringify((data as Record<string, unknown>).primaryCaregiverIds ?? []);
-            if (membershipChanged && !this.isPrimaryCaregiverForCircle(existing, auth.uid)) {
-              throw new PermissionDeniedError(
-                'Only the patient or a primary caregiver can modify care circle membership'
-              );
+          const isMemberOrPatient =
+            existingPatientId === auth.uid || existingCaregivers.some((id) => id === auth.uid);
+
+          if (!isMemberOrPatient) {
+            const redeemedCode =
+              typeof data.lastRedeemedInviteCode === 'string' ? data.lastRedeemedInviteCode : '';
+            const invite = redeemedCode ? this.stores.care_invites.get(redeemedCode) : undefined;
+            const nextCaregivers = Array.isArray(data.caregiverIds) ? data.caregiverIds : [];
+            const samePatient = data.patientId === existing.patientId && existingPatientId === docId;
+            const sameInviteCode = data.inviteCode === existing.inviteCode;
+            const validInvite =
+              Boolean(invite) &&
+              invite!.active === true &&
+              invite!.patientId === docId;
+            const preservesExisting = existingCaregivers.every((id) => nextCaregivers.includes(id));
+            const exactPlusOne = nextCaregivers.length === existingCaregivers.length + 1;
+            const includesSelf = nextCaregivers.includes(auth.uid);
+            const allowedSelfJoinKeys = new Set([
+              'caregiverIds',
+              'members',
+              'lastRedeemedInviteCode',
+              'updatedAt',
+            ]);
+            const allKeys = new Set([...Object.keys(existing), ...Object.keys(data)]);
+            const onlyAllowedFieldsChanged = Array.from(allKeys).every((key) => {
+              if (allowedSelfJoinKeys.has(key)) return true;
+              return JSON.stringify(existing[key]) === JSON.stringify(data[key]);
+            });
+
+            if (
+              !(
+                samePatient &&
+                sameInviteCode &&
+                redeemedCode.length > 0 &&
+                validInvite &&
+                preservesExisting &&
+                exactPlusOne &&
+                includesSelf &&
+                onlyAllowedFieldsChanged
+              )
+            ) {
+              throw new PermissionDeniedError('Unauthorized care_circles update');
             }
+          } else {
+            if (patientId && patientId !== existingPatientId) {
+              throw new PermissionDeniedError('Cannot reassign care circle patientId');
+            }
+            if (auth.uid !== existingPatientId) {
+              const membershipChanged =
+                JSON.stringify(existing.caregiverIds ?? []) !== JSON.stringify(data.caregiverIds ?? []) ||
+                JSON.stringify(existing.members ?? []) !== JSON.stringify(data.members ?? []) ||
+                JSON.stringify((existing as Record<string, unknown>).primaryCaregiverIds ?? []) !==
+                  JSON.stringify((data as Record<string, unknown>).primaryCaregiverIds ?? []);
+              if (membershipChanged && !this.isPrimaryCaregiverForCircle(existing, auth.uid)) {
+                throw new PermissionDeniedError(
+                  'Only the patient or a primary caregiver can modify care circle membership'
+                );
+              }
+            }
+          }
+        }
+        break;
+      }
+      case 'care_invites': {
+        const patientId = typeof data.patientId === 'string' ? data.patientId : '';
+        if (!patientId || (patientId !== auth.uid && !this.isCaregiverFor(auth.uid, patientId))) {
+          throw new PermissionDeniedError(
+            `User "${auth.uid}" cannot write care_invites/${docId} for patient "${patientId}"`
+          );
+        }
+        if (existing) {
+          const existingPatientId = typeof existing.patientId === 'string' ? existing.patientId : '';
+          if (
+            !existingPatientId ||
+            (existingPatientId !== auth.uid && !this.isCaregiverFor(auth.uid, existingPatientId)) ||
+            patientId !== existingPatientId
+          ) {
+            throw new PermissionDeniedError(
+              `User "${auth.uid}" cannot modify existing care_invites/${docId}`
+            );
           }
         }
         break;
@@ -464,6 +540,11 @@ export class MockFirestoreDb {
     if (collection === 'care_circles') {
       if (existing.patientId !== auth.uid) {
         throw new PermissionDeniedError('Only the patient can delete their care circle');
+      }
+    } else if (collection === 'care_invites') {
+      const patientId = typeof existing.patientId === 'string' ? existing.patientId : '';
+      if (!patientId || (patientId !== auth.uid && !this.isCaregiverFor(auth.uid, patientId))) {
+        throw new PermissionDeniedError(`User "${auth.uid}" cannot delete care_invites/${docId}`);
       }
     } else if (collection === 'medications') {
       const patientId = typeof existing.patientId === 'string' ? existing.patientId : '';

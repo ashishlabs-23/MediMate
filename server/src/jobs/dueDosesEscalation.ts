@@ -2,6 +2,7 @@ import * as admin from 'firebase-admin';
 
 export const GENTLE_REMINDER_OFFSET_MS = 15 * 60 * 1000;
 export const ESCALATION_OFFSET_MS = 30 * 60 * 1000;
+export const ESCALATION_LOOKBACK_MS = 48 * 60 * 60 * 1000;
 export const BATCH_LIMIT = 500;
 export const FCM_MULTICAST_LIMIT = 500;
 
@@ -96,9 +97,13 @@ export async function processDueDoses(
   const initialReminderIds: string[] = [];
   const fcmResults: FCMSendResult[] = [];
 
+  const cutoffTimestamp = admin.firestore.Timestamp.fromDate(
+    new Date(nowMs - ESCALATION_LOOKBACK_MS)
+  );
   const doseSnap = await db
     .collection('dose_logs')
-    .where('status', 'not-in', ['taken', 'missed'])
+    .where('status', 'in', ['scheduled', 'due', 'snoozed', 'unconfirmed'])
+    .where('scheduledTime', '>=', cutoffTimestamp)
     .get();
 
   const pendingUpdates: Array<{

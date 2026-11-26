@@ -13,3 +13,4 @@ if (!admin.apps.length) {
 
 export { generateDailyDoseLogs } from './generateDailyDoseLogs';
 export { checkDueDosesAndEscalate } from './checkDueDosesAndEscalate';
+export { closeMissedDoses } from './closeMissedDoses';
