@@ -9,7 +9,6 @@ import {
   createCareCircleFixture,
   createDoseLogFixture,
   createDoseService,
-  createUserFixture,
   createUserProfile,
   DoseLogDocument,
   DoseStateMachineSimulator,

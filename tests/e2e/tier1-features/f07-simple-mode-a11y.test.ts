@@ -20,7 +20,7 @@ describe('Tier 1 — F07: Elderly "Simple Mode" Touch Targets (>=44x44px) & WCAG
     expect(result.width).toBeGreaterThanOrEqual(44);
     expect(result.height).toBeGreaterThanOrEqual(44);
 
-    const interactiveControls = container.querySelectorAll('button, a, [role="button"]');
+    const interactiveControls = container.querySelectorAll<HTMLElement>('button, a, [role="button"]');
     expect(interactiveControls.length).toBeGreaterThanOrEqual(2);
     for (const control of interactiveControls) {
       const check = assertTouchTarget(control, 44);

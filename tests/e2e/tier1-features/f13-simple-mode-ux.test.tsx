@@ -4,7 +4,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthProvider } from '@/contexts/AuthContext';
-import { MockFirestoreDb, createDoseLogFixture, seedPatientCareCircleScenario } from '@harness/index';
+import { MockFirestoreDb, createDoseLogFixture, seedPatientCareCircleScenario, type FirestoreRecord } from '@harness/index';
 import {
   PROJECT_ROOT,
   createMockFirestoreAdapter,
@@ -87,7 +87,7 @@ function seedDueBreakfastDose(dateStr: string): string {
   const { doseLog } = seedPatientCareCircleScenario(mockDb, { doseStatus: 'due' });
   const [y, m, d] = dateStr.split('-').map(Number);
   const doseId = `patient_ramesh_med_metformin_${dateStr}_0800`;
-  mockDb.seedDoc('dose_logs', doseLog.id, {
+  mockDb.seedDoc('dose_logs', doseId, {
     ...doseLog,
     id: doseId,
     scheduledDate: dateStr,
@@ -154,7 +154,7 @@ describe('Tier 1 — F13: Elderly Simple Mode UX & Multi-Sensory Safety (R3)', (
       });
 
       expect(updateDoseLogSpy).not.toHaveBeenCalled();
-      expect(mockDb.inspectDoc<DoseLogDocument>('dose_logs', doseId)?.status).toBe('due');
+      expect(mockDb.inspectDoc<DoseLogDocument & FirestoreRecord>('dose_logs', doseId)?.status).toBe('due');
       expect(screen.getByRole('button', { name: /mark metformin as taken/i })).not.toBeDisabled();
     }
   );
@@ -179,7 +179,7 @@ describe('Tier 1 — F13: Elderly Simple Mode UX & Multi-Sensory Safety (R3)', (
       expect(updateDoseLogSpy).toHaveBeenCalledTimes(1);
       expect(updateDoseLogSpy.mock.calls[0][0]).toBe(doseId);
       expect(updateDoseLogSpy.mock.calls[0][1]).toMatchObject({ status: 'taken' });
-      expect(mockDb.inspectDoc<DoseLogDocument>('dose_logs', doseId)?.status).toBe('taken');
+      expect(mockDb.inspectDoc<DoseLogDocument & FirestoreRecord>('dose_logs', doseId)?.status).toBe('taken');
     }
   );
 

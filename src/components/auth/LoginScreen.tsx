@@ -7,7 +7,7 @@
  *   - 'caregiver': Family caregiver monitoring patient adherence in Dashboard.
  */
 
-import { type FormEvent, useCallback, useEffect, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
@@ -192,6 +192,7 @@ export function LoginScreen() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submittingRef = useRef(false);
 
   const navigateForRole = useCallback(
     (role: UserRole) => {
@@ -243,19 +244,23 @@ export function LoginScreen() {
       try {
         const result = await getRedirectResult(auth);
         clearPendingGoogleRedirectFlag();
-        if (!active || !result?.user) return;
+        if (!active || !result?.user || submittingRef.current) return;
+        submittingRef.current = true;
         setIsSubmitting(true);
-        await handleGoogleAuthenticatedUser(result.user);
+        try {
+          await handleGoogleAuthenticatedUser(result.user);
+        } finally {
+          submittingRef.current = false;
+          if (active) {
+            setIsSubmitting(false);
+          }
+        }
       } catch (err: unknown) {
         clearPendingGoogleRedirectFlag();
         if (!active || !hadPendingRedirect) return;
         const mapped = mapGoogleAuthError(err);
         if (mapped) {
           setErrorMsg(mapped);
-        }
-      } finally {
-        if (active) {
-          setIsSubmitting(false);
         }
       }
     })();
@@ -267,16 +272,19 @@ export function LoginScreen() {
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (submittingRef.current) return;
+
     setErrorMsg(null);
     setSuccessMsg(null);
-    setIsSubmitting(true);
 
     const cleanEmail = email.trim();
     if (!cleanEmail || !password) {
       setErrorMsg('Please enter both email and password.');
-      setIsSubmitting(false);
       return;
     }
+
+    submittingRef.current = true;
+    setIsSubmitting(true);
 
     try {
       if (mode === 'signup') {
@@ -310,11 +318,14 @@ export function LoginScreen() {
     } catch (err: unknown) {
       setErrorMsg(mapEmailAuthError(err));
     } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
   }
 
   async function handleGoogleSignIn() {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setErrorMsg(null);
     setSuccessMsg(null);
     setIsSubmitting(true);
@@ -332,16 +343,16 @@ export function LoginScreen() {
           try {
             writePendingGoogleRedirectFlag();
             setSuccessMsg('Redirecting to Google Sign-In… please wait.');
-            setIsSubmitting(false);
             await signInWithRedirect(auth, provider);
             return;
           } catch (redirectErr: unknown) {
             clearPendingGoogleRedirectFlag();
             setSuccessMsg(null);
+            const mappedRedirectErr = mapGoogleAuthError(redirectErr);
             setErrorMsg(
-              'Your browser blocked the Google Sign-In popup. Please allow popups for this site, or try in a different browser.'
+              mappedRedirectErr ??
+                'Your browser blocked the Google Sign-In popup. Please allow popups for this site, or try in a different browser.'
             );
-            setIsSubmitting(false);
             return;
           }
         }
@@ -349,7 +360,6 @@ export function LoginScreen() {
         setErrorMsg(
           'Your browser blocked the Google Sign-In popup. Please allow popups for this site and try again.'
         );
-        setIsSubmitting(false);
         return;
       }
 
@@ -358,24 +368,28 @@ export function LoginScreen() {
         setErrorMsg(mapped);
       }
     } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
   }
 
   async function handleConfirmGoogleRole() {
-    if (!pendingGoogleUser) return;
+    if (!pendingGoogleUser || submittingRef.current) return;
+    const targetUser = pendingGoogleUser;
+    const chosenRole = selectedRole;
+    submittingRef.current = true;
     setErrorMsg(null);
     setSuccessMsg(null);
     setIsSubmitting(true);
 
     try {
-      await upsertUserDocument(pendingGoogleUser.uid, {
-        uid: pendingGoogleUser.uid,
-        email: pendingGoogleUser.email ?? '',
+      await upsertUserDocument(targetUser.uid, {
+        uid: targetUser.uid,
+        email: targetUser.email ?? '',
         displayName:
-          pendingGoogleUser.displayName ||
-          (selectedRole === 'caregiver' ? 'Caregiver' : 'Older Adult'),
-        role: selectedRole,
+          targetUser.displayName ||
+          (chosenRole === 'caregiver' ? 'Caregiver' : 'Older Adult'),
+        role: chosenRole,
         timezone: resolveBrowserTimezone(),
         fcmTokens: [],
         accessibilityPreferences: {
@@ -387,7 +401,6 @@ export function LoginScreen() {
       });
 
       await refreshUserProfile?.();
-      const chosenRole = selectedRole;
       setPendingGoogleUser(null);
       navigateForRole(chosenRole);
     } catch (err: unknown) {
@@ -397,11 +410,14 @@ export function LoginScreen() {
           : 'Unable to complete your account setup. Please try again.';
       setErrorMsg(msg);
     } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
   }
 
   async function handleCancelGoogleRole() {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setErrorMsg(null);
     setSuccessMsg(null);
     setIsSubmitting(true);
@@ -413,12 +429,14 @@ export function LoginScreen() {
       // Best-effort sign-out when cancelling onboarding
     } finally {
       setPendingGoogleUser(null);
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
   }
 
   async function handleForgotPasswordSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (submittingRef.current) return;
     setErrorMsg(null);
     setSuccessMsg(null);
 
@@ -432,6 +450,7 @@ export function LoginScreen() {
       return;
     }
 
+    submittingRef.current = true;
     setIsSubmitting(true);
     try {
       await sendPasswordResetEmail(auth, cleanEmail);
@@ -441,11 +460,13 @@ export function LoginScreen() {
     } catch (err: unknown) {
       setErrorMsg(mapPasswordResetError(err));
     } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
   }
 
   function handleDemoLogin(role: OnboardingRole) {
+    if (submittingRef.current) return;
     if (loginAsDemo) {
       loginAsDemo(role);
       navigateForRole(role);
@@ -467,8 +488,9 @@ export function LoginScreen() {
             type="button"
             role="radio"
             aria-checked={selectedRole === 'elderly'}
+            disabled={isSubmitting}
             onClick={() => setSelectedRole('elderly')}
-            className={`py-2.5 px-3 text-xs sm:text-sm font-bold rounded-md transition-all text-center min-h-touch min-w-touch min-h-[44px] min-w-[44px] flex items-center justify-center gap-1.5 ${
+            className={`py-2.5 px-3 text-xs sm:text-sm font-bold rounded-md transition-all text-center min-h-touch min-w-touch min-h-[44px] min-w-[44px] flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed ${
               selectedRole === 'elderly'
                 ? 'bg-white text-brand-teal shadow-sm border border-slate-200'
                 : 'text-ink-secondary hover:text-ink-primary'
@@ -480,8 +502,9 @@ export function LoginScreen() {
             type="button"
             role="radio"
             aria-checked={selectedRole === 'caregiver'}
+            disabled={isSubmitting}
             onClick={() => setSelectedRole('caregiver')}
-            className={`py-2.5 px-3 text-xs sm:text-sm font-bold rounded-md transition-all text-center min-h-touch min-w-touch min-h-[44px] min-w-[44px] flex items-center justify-center gap-1.5 ${
+            className={`py-2.5 px-3 text-xs sm:text-sm font-bold rounded-md transition-all text-center min-h-touch min-w-touch min-h-[44px] min-w-[44px] flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed ${
               selectedRole === 'caregiver'
                 ? 'bg-white text-brand-teal shadow-sm border border-slate-200'
                 : 'text-ink-secondary hover:text-ink-primary'
@@ -730,12 +753,14 @@ export function LoginScreen() {
                 type="button"
                 role="tab"
                 aria-selected={mode === 'signin'}
+                disabled={isSubmitting}
                 onClick={() => {
+                  if (submittingRef.current) return;
                   setMode('signin');
                   setErrorMsg(null);
                   setSuccessMsg(null);
                 }}
-                className={`flex-1 min-h-touch min-w-touch min-h-[44px] min-w-[44px] pb-2.5 text-sm font-bold border-b-2 transition-all flex items-center justify-center ${
+                className={`flex-1 min-h-touch min-w-touch min-h-[44px] min-w-[44px] pb-2.5 text-sm font-bold border-b-2 transition-all flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed ${
                   mode === 'signin'
                     ? 'border-brand-teal text-brand-teal'
                     : 'border-transparent text-ink-muted hover:text-ink-secondary'
@@ -747,12 +772,14 @@ export function LoginScreen() {
                 type="button"
                 role="tab"
                 aria-selected={mode === 'signup'}
+                disabled={isSubmitting}
                 onClick={() => {
+                  if (submittingRef.current) return;
                   setMode('signup');
                   setErrorMsg(null);
                   setSuccessMsg(null);
                 }}
-                className={`flex-1 min-h-touch min-w-touch min-h-[44px] min-w-[44px] pb-2.5 text-sm font-bold border-b-2 transition-all flex items-center justify-center ${
+                className={`flex-1 min-h-touch min-w-touch min-h-[44px] min-w-[44px] pb-2.5 text-sm font-bold border-b-2 transition-all flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed ${
                   mode === 'signup'
                     ? 'border-brand-teal text-brand-teal'
                     : 'border-transparent text-ink-muted hover:text-ink-secondary'
@@ -899,41 +926,45 @@ export function LoginScreen() {
         )}
 
         {/* Demarcated Trial Sandbox Section (Below Personal Auth) */}
-        <div
-          data-testid="trial-demo-section"
-          aria-labelledby="trial-demo-heading"
-          className="pt-5 border-t border-slate-200"
-        >
-          <div className="p-4 rounded-btn bg-slate-50 border-2 border-dashed border-slate-300 text-center">
-            <h2
-              id="trial-demo-heading"
-              className="text-xs font-extrabold text-ink-secondary uppercase tracking-wider mb-1.5"
-            >
-              Try Demo (Sample Data Only)
-            </h2>
-            <p className="text-xs text-ink-secondary mb-3">
-              Explore MediMate with preloaded sample medications. Changes made in trial mode are not saved to a personal account.
-            </p>
-            <div className="space-y-2">
-              <button
-                type="button"
-                onClick={() => handleDemoLogin('elderly')}
-                className="w-full min-h-touch min-h-[44px] py-2.5 px-4 rounded-btn border border-slate-300 bg-white text-ink-primary text-sm font-semibold hover:bg-slate-100 active:bg-slate-200 transition-colors flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2"
+        {!pendingGoogleUser && (
+          <div
+            data-testid="trial-demo-section"
+            aria-labelledby="trial-demo-heading"
+            className="pt-5 border-t border-slate-200"
+          >
+            <div className="p-4 rounded-btn bg-slate-50 border-2 border-dashed border-slate-300 text-center">
+              <h2
+                id="trial-demo-heading"
+                className="text-xs font-extrabold text-ink-secondary uppercase tracking-wider mb-1.5"
               >
-                <span aria-hidden="true">👴</span>
-                <span>Try Older Adult Demo (Ramesh Sharma)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleDemoLogin('caregiver')}
-                className="w-full min-h-touch min-h-[44px] py-2.5 px-4 rounded-btn border border-slate-300 bg-white text-ink-primary text-sm font-semibold hover:bg-slate-100 active:bg-slate-200 transition-colors flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2"
-              >
-                <span aria-hidden="true">👩‍⚕️</span>
-                <span>Try Caregiver Demo (Priya Sharma)</span>
-              </button>
+                Try Demo (Sample Data Only)
+              </h2>
+              <p className="text-xs text-ink-secondary mb-3">
+                Explore MediMate with preloaded sample medications. Changes made in trial mode are not saved to a personal account.
+              </p>
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  disabled={isSubmitting}
+                  onClick={() => handleDemoLogin('elderly')}
+                  className="w-full min-h-touch min-h-[44px] py-2.5 px-4 rounded-btn border border-slate-300 bg-white text-ink-primary text-sm font-semibold hover:bg-slate-100 active:bg-slate-200 transition-colors flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <span aria-hidden="true">👴</span>
+                  <span>Try Older Adult Demo (Ramesh Sharma)</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={isSubmitting}
+                  onClick={() => handleDemoLogin('caregiver')}
+                  className="w-full min-h-touch min-h-[44px] py-2.5 px-4 rounded-btn border border-slate-300 bg-white text-ink-primary text-sm font-semibold hover:bg-slate-100 active:bg-slate-200 transition-colors flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <span aria-hidden="true">👩‍⚕️</span>
+                  <span>Try Caregiver Demo (Priya Sharma)</span>
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </section>
     </main>
   );

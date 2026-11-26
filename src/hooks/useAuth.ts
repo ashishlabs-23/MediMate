@@ -87,6 +87,7 @@ export function useAuth(): AuthContextValue {
   const firebaseUserRef = useRef<User | null | undefined>(undefined);
   const userProfileRef = useRef<UserDocument | null>(null);
   const profileFetchSeqRef = useRef(0);
+  const demoAuthUidSnapshotRef = useRef<string | null>(null);
 
   useEffect(() => {
     isMounted.current = true;
@@ -109,6 +110,7 @@ export function useAuth(): AuthContextValue {
           if (user) {
             const demoSession = isDemoUid(user.uid);
             isDemoRef.current = demoSession;
+            demoAuthUidSnapshotRef.current = demoSession ? (auth?.currentUser?.uid ?? null) : null;
             setIsDemo(demoSession);
             firebaseUserRef.current = user;
             setFirebaseUser(user);
@@ -152,6 +154,7 @@ export function useAuth(): AuthContextValue {
           } else if (!isDemoRef.current) {
             profileFetchSeqRef.current += 1;
             isDemoRef.current = false;
+            demoAuthUidSnapshotRef.current = null;
             setIsDemo(false);
             firebaseUserRef.current = null;
             setFirebaseUser(null);
@@ -187,6 +190,7 @@ export function useAuth(): AuthContextValue {
   const signOut = useCallback(async (): Promise<void> => {
     profileFetchSeqRef.current += 1;
     isDemoRef.current = false;
+    demoAuthUidSnapshotRef.current = null;
     setIsDemo(false);
     try {
       await firebaseSignOut(auth);
@@ -201,6 +205,7 @@ export function useAuth(): AuthContextValue {
 
   const loginAsDemo = useCallback((role: UserRole): void => {
     profileFetchSeqRef.current += 1;
+    demoAuthUidSnapshotRef.current = auth?.currentUser?.uid ?? null;
     const mockUid = role === 'caregiver' ? 'caregiver_priya' : 'patient_ramesh';
     const displayName = role === 'caregiver' ? 'Priya Sharma' : 'Ramesh Sharma';
     const mockUser = {
@@ -232,17 +237,36 @@ export function useAuth(): AuthContextValue {
   }, []);
 
   const refreshUserProfile = useCallback(async (): Promise<void> => {
-    const activeUser = firebaseUserRef.current ?? auth?.currentUser ?? null;
-    if (!activeUser || isDemoRef.current || isDemoUid(activeUser.uid)) {
+    const sdkUser = auth?.currentUser ?? null;
+    const hasNewRealSdkUser =
+      sdkUser !== null &&
+      !isDemoUid(sdkUser.uid) &&
+      (!isDemoRef.current || sdkUser.uid !== demoAuthUidSnapshotRef.current);
+
+    const activeUser =
+      hasNewRealSdkUser && sdkUser.uid !== firebaseUserRef.current?.uid
+        ? sdkUser
+        : firebaseUserRef.current ?? sdkUser;
+
+    if (!activeUser || isDemoUid(activeUser.uid) || (isDemoRef.current && !hasNewRealSdkUser)) {
       return;
     }
 
-    if (!firebaseUserRef.current) {
+    if (isDemoRef.current || firebaseUserRef.current?.uid !== activeUser.uid) {
+      const uidChanged = firebaseUserRef.current?.uid !== activeUser.uid;
+      isDemoRef.current = false;
+      demoAuthUidSnapshotRef.current = null;
       firebaseUserRef.current = activeUser;
+      if (uidChanged) {
+        userProfileRef.current = null;
+      }
       if (isMounted.current) {
         setFirebaseUser(activeUser);
         setIsDemo(false);
         setIsLoading(false);
+        if (uidChanged) {
+          setUserProfile(null);
+        }
       }
     }
 

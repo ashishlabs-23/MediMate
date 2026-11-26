@@ -28,6 +28,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { db } from './firebase';
+import { createOrSyncCareInvite, generateInviteCode } from './careCircleService';
 import type { MedicationDocument, DoseLogDocument } from '../types/firestore';
 
 const BATCH_LIMIT = 490; // Keep below Firestore 500-write batch limit
@@ -259,26 +260,26 @@ export async function generateTodayLogs(patientId: string): Promise<GenerateResu
     await seedBatch.commit().catch(() => null);
 
     // Also seed care circle for caregiver visibility
+    const inviteCode = generateInviteCode();
+    const patientName = patientId === 'patient_ramesh' ? 'Ramesh Sharma' : 'Patient';
     const circleDoc = doc(collection(db, 'care_circles'), patientId);
     await setDoc(circleDoc, {
       id: patientId,
       patientId,
-      patientName: patientId === 'patient_ramesh' ? 'Ramesh Sharma' : 'Patient',
-      caregiverIds: ['caregiver_priya'],
-      members: [
-        {
-          userId: 'caregiver_priya',
-          displayName: 'Priya Sharma',
-          email: 'priya@medimate.local',
-          role: 'primary',
-          permissions: ['read', 'write_schedule', 'receive_alerts'],
-          status: 'active',
-          invitedAt: Timestamp.now(),
-        },
-      ],
-      inviteCode: 'MED-7892',
+      patientName,
+      caregiverIds: [],
+      members: [],
+      inviteCode,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
+    }).catch(() => null);
+
+    await createOrSyncCareInvite({
+      code: inviteCode,
+      patientId,
+      patientName,
+      createdBy: patientId,
+      active: true,
     }).catch(() => null);
   }
 

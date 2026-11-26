@@ -536,4 +536,288 @@ describe('LoginScreen', () => {
     expect(refreshUserProfile).toHaveBeenCalledTimes(1);
     expect(sessionStorage.getItem('medimate_google_redirect_pending')).toBeNull();
   });
+
+  it('does not allow a slow mount getRedirectResult(null) to re-enable an in-flight email submission', async () => {
+    let resolveRedirect: ((val: null) => void) | null = null;
+    mockGetRedirectResult.mockReturnValueOnce(
+      new Promise<null>((resolve) => {
+        resolveRedirect = resolve;
+      })
+    );
+
+    let resolveSignIn: ((val: { user: { uid: string } }) => void) | null = null;
+    mockSignInWithEmailAndPassword.mockReturnValueOnce(
+      new Promise<{ user: { uid: string } }>((resolve) => {
+        resolveSignIn = resolve;
+      })
+    );
+    mockGetUserDocument.mockResolvedValueOnce(
+      makeUserDoc({ uid: 'slow-redirect-user', role: 'elderly' })
+    );
+
+    renderLoginScreen();
+
+    fireEvent.change(screen.getByLabelText('Email address'), {
+      target: { value: 'elder@example.com' },
+    });
+    fireEvent.change(screen.getByLabelText('Password'), {
+      target: { value: 'secret123' },
+    });
+
+    const submitBtn = screen.getByRole('button', { name: 'Sign In' });
+    const form = submitBtn.closest('form');
+    expect(form).not.toBeNull();
+    fireEvent.submit(form!);
+
+    expect(screen.getByRole('button', { name: 'Please wait…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Please wait…' })).toHaveAttribute(
+      'aria-busy',
+      'true'
+    );
+    expect(screen.getByRole('tab', { name: 'Sign In' })).toBeDisabled();
+    expect(screen.getByRole('tab', { name: 'Create New Account' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Try Older Adult Demo/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Try Caregiver Demo/i })).toBeDisabled();
+
+    // Slow mount getRedirectResult resolves null while sign-in is still pending
+    await act(async () => {
+      resolveRedirect?.(null);
+    });
+
+    expect(screen.getByRole('button', { name: 'Please wait…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Please wait…' })).toHaveAttribute(
+      'aria-busy',
+      'true'
+    );
+    expect(screen.getByRole('tab', { name: 'Sign In' })).toBeDisabled();
+    expect(screen.getByRole('tab', { name: 'Create New Account' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Try Older Adult Demo/i })).toBeDisabled();
+
+    await act(async () => {
+      resolveSignIn?.({ user: { uid: 'slow-redirect-user' } });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('route-today')).toBeInTheDocument();
+    });
+  });
+
+  it('guards handleSubmit, handleGoogleSignIn, handleConfirmGoogleRole, and handleForgotPasswordSubmit against synchronous re-entrant submits', async () => {
+    const loginAsDemo = vi.fn();
+    renderLoginScreen({ loginAsDemo });
+    await act(async () => {});
+
+    // 1. Synchronous double submit on email form + concurrent Google/demo clicks
+    let resolveEmail: ((val: { user: { uid: string } }) => void) | null = null;
+    mockSignInWithEmailAndPassword.mockReturnValueOnce(
+      new Promise<{ user: { uid: string } }>((resolve) => {
+        resolveEmail = resolve;
+      })
+    );
+    mockGetUserDocument.mockRejectedValueOnce(new Error('abort-stay-on-login'));
+
+    fireEvent.change(screen.getByLabelText('Email address'), {
+      target: { value: 'user@example.com' },
+    });
+    fireEvent.change(screen.getByLabelText('Password'), {
+      target: { value: 'password123' },
+    });
+
+    const form = screen.getByRole('button', { name: 'Sign In' }).closest('form');
+    expect(form).not.toBeNull();
+    fireEvent.submit(form!);
+    fireEvent.submit(form!);
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
+    fireEvent.click(screen.getByRole('button', { name: /Try Older Adult Demo/i }));
+
+    expect(mockSignInWithEmailAndPassword).toHaveBeenCalledTimes(1);
+    expect(mockSignInWithPopup).not.toHaveBeenCalled();
+    expect(loginAsDemo).not.toHaveBeenCalled();
+
+    // Finish email submit (stay on login via getUserDocument failure)
+    await act(async () => {
+      resolveEmail?.({ user: { uid: 'email-guard-1' } });
+    });
+
+    // 2. Synchronous double click on Continue with Google
+    let resolvePopup:
+      | ((val: { user: { uid: string; email: string; displayName: string } }) => void)
+      | null = null;
+    mockSignInWithPopup.mockReturnValueOnce(
+      new Promise<{ user: { uid: string; email: string; displayName: string } }>((resolve) => {
+        resolvePopup = resolve;
+      })
+    );
+    mockGetUserDocument.mockResolvedValueOnce(null);
+
+    const googleBtn = screen.getByRole('button', { name: 'Continue with Google' });
+    fireEvent.click(googleBtn);
+    fireEvent.click(googleBtn);
+    expect(mockSignInWithPopup).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolvePopup?.({
+        user: { uid: 'google-guard-new', email: 'g@example.com', displayName: 'G Guard' },
+      });
+    });
+
+    // 3. Synchronous double click on Continue as Older Adult + concurrent Use another account
+    const confirmBox = screen.getByTestId('google-role-confirmation');
+    let resolveUpsert: (() => void) | null = null;
+    mockUpsertUserDocument.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveUpsert = resolve;
+      })
+    );
+
+    const continueBtn = within(confirmBox).getByRole('button', {
+      name: 'Continue as Older Adult',
+    });
+    const cancelBtn = within(confirmBox).getByRole('button', { name: 'Use another account' });
+    fireEvent.click(continueBtn);
+    fireEvent.click(continueBtn);
+    fireEvent.click(cancelBtn);
+
+    expect(mockUpsertUserDocument).toHaveBeenCalledTimes(1);
+    expect(mockFirebaseSignOut).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveUpsert?.();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('route-today')).toBeInTheDocument();
+    });
+
+    // 4. Synchronous double submit on Forgot Password form
+    cleanup();
+    renderLoginScreen();
+    await act(async () => {});
+
+    fireEvent.change(screen.getByLabelText('Email address'), {
+      target: { value: 'reset@example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Forgot password?' }));
+
+    const resetPanel = screen.getByTestId('password-reset-panel');
+    let resolveReset: (() => void) | null = null;
+    mockSendPasswordResetEmail.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveReset = resolve;
+      })
+    );
+
+    fireEvent.submit(resetPanel);
+    fireEvent.submit(resetPanel);
+    expect(mockSendPasswordResetEmail).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveReset?.();
+    });
+    expect(screen.getByRole('status')).toHaveTextContent(
+      /Password reset email sent to reset@example\.com/i
+    );
+  });
+
+  it('disables mode tabs and trial demo buttons while submitting and hides trial-demo-section during pendingGoogleUser', async () => {
+    renderLoginScreen();
+    await act(async () => {});
+
+    let resolvePopup:
+      | ((val: { user: { uid: string; email: string; displayName: string } }) => void)
+      | null = null;
+    mockSignInWithPopup.mockReturnValueOnce(
+      new Promise<{ user: { uid: string; email: string; displayName: string } }>((resolve) => {
+        resolvePopup = resolve;
+      })
+    );
+    mockGetUserDocument.mockResolvedValueOnce(null);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
+
+    expect(screen.getByRole('tab', { name: 'Sign In' })).toBeDisabled();
+    expect(screen.getByRole('tab', { name: 'Create New Account' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Try Older Adult Demo/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Try Caregiver Demo/i })).toBeDisabled();
+
+    await act(async () => {
+      resolvePopup?.({
+        user: { uid: 'google-hide-trial', email: 'h@example.com', displayName: 'Hari' },
+      });
+    });
+
+    const confirmBox = screen.getByTestId('google-role-confirmation');
+    expect(confirmBox).toBeInTheDocument();
+    expect(screen.queryByTestId('trial-demo-section')).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(within(confirmBox).getByRole('button', { name: 'Use another account' }));
+    });
+
+    expect(screen.queryByTestId('google-role-confirmation')).not.toBeInTheDocument();
+    expect(screen.getByTestId('trial-demo-section')).toBeInTheDocument();
+  });
+
+  it('keeps Google button disabled while signInWithRedirect is pending and maps redirect fallback errors cleanly', async () => {
+    renderLoginScreen();
+    await act(async () => {});
+
+    // 1. In-flight signInWithRedirect keeps Google button disabled and displays redirect status
+    mockSignInWithPopup.mockRejectedValueOnce({ code: 'auth/popup-blocked' });
+    let resolveRedirect: (() => void) | null = null;
+    mockSignInWithRedirect.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveRedirect = resolve;
+      })
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Redirecting to Google Sign-In… please wait.'
+      );
+    });
+    expect(screen.getByRole('button', { name: 'Continue with Google' })).toBeDisabled();
+    expect(sessionStorage.getItem('medimate_google_redirect_pending')).toBe('1');
+
+    await act(async () => {
+      resolveRedirect?.();
+    });
+    expect(screen.getByRole('button', { name: 'Continue with Google' })).not.toBeDisabled();
+
+    // 2. signInWithRedirect rejects with auth/popup-blocked -> fallback popup guidance
+    mockSignInWithPopup.mockRejectedValueOnce({ code: 'auth/popup-blocked' });
+    mockSignInWithRedirect.mockRejectedValueOnce({ code: 'auth/popup-blocked' });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
+    });
+    expect(sessionStorage.getItem('medimate_google_redirect_pending')).toBeNull();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/blocked the Google Sign-In popup/i);
+    expect(screen.getByRole('button', { name: 'Continue with Google' })).not.toBeDisabled();
+
+    // 3. signInWithRedirect rejects with auth/unauthorized-domain -> mapped error (not popup copy)
+    mockSignInWithPopup.mockRejectedValueOnce({ code: 'auth/popup-blocked' });
+    mockSignInWithRedirect.mockRejectedValueOnce({ code: 'auth/unauthorized-domain' });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
+    });
+    expect(sessionStorage.getItem('medimate_google_redirect_pending')).toBeNull();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/not authorized for Google Sign-In/i);
+    expect(screen.getByRole('button', { name: 'Continue with Google' })).not.toBeDisabled();
+
+    // 4. signInWithRedirect rejects with auth/network-request-failed -> mapped network error
+    mockSignInWithPopup.mockRejectedValueOnce({ code: 'auth/popup-blocked' });
+    mockSignInWithRedirect.mockRejectedValueOnce({ code: 'auth/network-request-failed' });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
+    });
+    expect(sessionStorage.getItem('medimate_google_redirect_pending')).toBeNull();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /Network error while connecting to Google Sign-In/i
+    );
+    expect(screen.getByRole('button', { name: 'Continue with Google' })).not.toBeDisabled();
+  });
 });

@@ -26,6 +26,10 @@ import {
   updateMedication,
 } from '../lib/firestore';
 import {
+  redeemCareInviteCode,
+  subscribeToCareCirclesForCaregiver,
+} from '../lib/careCircleService';
+import {
   generateTodayLogs,
   generateTodayLogsForMedication,
 } from '../lib/generateTodayLogs';
@@ -157,6 +161,11 @@ export function CaregiverDashboard() {
   const [careCircle, setCareCircle] = useState<CareCircleDocument | null>(null);
   const [medications, setMedications] = useState<MedicationDocument[]>([]);
   const [historyDoses, setHistoryDoses] = useState<DoseLogDocument[]>([]);
+  const [linkedCircles, setLinkedCircles] = useState<CareCircleDocument[]>([]);
+  const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
+  const [inviteCodeInput, setInviteCodeInput] = useState('');
+  const [isPairing, setIsPairing] = useState(false);
+  const [pairError, setPairError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isMedsLoading, setIsMedsLoading] = useState(true);
   const [isHistoryLoading, setIsHistoryLoading] = useState(true);
@@ -172,27 +181,122 @@ export function CaregiverDashboard() {
   const demoDoseMutatedRef = useRef(false);
   const demoCircleMutatedRef = useRef(false);
 
-  // If user is caregiver, monitor target patient (default 'patient_ramesh')
   const currentUid = firebaseUser?.uid ?? '';
   const isCaregiverRole = userProfile?.role === 'caregiver' || currentUid.includes('caregiver');
-  const patientId = isCaregiverRole ? 'patient_ramesh' : currentUid;
-  const patientName =
-    careCircle?.patientName ?? (patientId === 'patient_ramesh' ? 'Ramesh Sharma' : 'Patient');
-  const patientPhone = '9876543210';
-  const date = todayISO();
-  const last7Dates = useMemo(() => getLast7Dates(date), [date]);
 
   // Detect demo session: loginAsDemo() sets a mock uid that is not a real Firebase Auth token.
   // In test environment (Vitest), mockDb is used so we allow normal Firestore subscription flow.
   const isTestMode = typeof import.meta !== 'undefined' && import.meta.env?.MODE === 'test';
   const isDemoSession =
-    !isTestMode &&
-    (currentUid === 'patient_ramesh' ||
-      currentUid === 'caregiver_priya' ||
-      currentUid.startsWith('demo_'));
+    isDemo ||
+    (!isTestMode &&
+      (currentUid === 'patient_ramesh' ||
+        currentUid === 'caregiver_priya' ||
+        currentUid.startsWith('demo_')));
+
+  // Subscribe to caregiver's linked care circles
+  useEffect(() => {
+    if (!isCaregiverRole || !currentUid) {
+      setLinkedCircles([]);
+      return;
+    }
+
+    if (isDemoSession || currentUid === 'caregiver_priya') {
+      const demoCircle = getMockCareCircle('patient_ramesh');
+      setLinkedCircles([demoCircle]);
+      return;
+    }
+
+    const unsub = subscribeToCareCirclesForCaregiver(
+      currentUid,
+      (circles) => {
+        setLinkedCircles(circles);
+      },
+      (err) => {
+        console.warn('Failed to subscribe to caregiver care circles:', err);
+      }
+    );
+
+    return () => {
+      unsub();
+    };
+  }, [isCaregiverRole, currentUid, isDemoSession]);
+
+  // Determine active patientId
+  const patientId = useMemo(() => {
+    if (!isCaregiverRole) return currentUid;
+    if (selectedPatientId && linkedCircles.some((c) => c.patientId === selectedPatientId)) {
+      return selectedPatientId;
+    }
+    if (linkedCircles.length > 0) {
+      return linkedCircles[0].patientId;
+    }
+    if (isDemoSession || currentUid === 'caregiver_priya') {
+      return 'patient_ramesh';
+    }
+    return null;
+  }, [isCaregiverRole, currentUid, selectedPatientId, linkedCircles, isDemoSession]);
+
+  // Keep selectedPatientId in sync when linkedCircles changes (e.g. mid-session revocation)
+  useEffect(() => {
+    if (linkedCircles.length > 0) {
+      if (!selectedPatientId || !linkedCircles.some((c) => c.patientId === selectedPatientId)) {
+        setSelectedPatientId(linkedCircles[0].patientId);
+      }
+    } else if (!isDemoSession && currentUid !== 'caregiver_priya') {
+      setSelectedPatientId(null);
+    }
+  }, [linkedCircles, selectedPatientId, isDemoSession, currentUid]);
+
+  const patientName =
+    careCircle?.patientName ??
+    (patientId === 'patient_ramesh'
+      ? 'Ramesh Sharma'
+      : linkedCircles.find((c) => c.patientId === patientId)?.patientName ?? (patientId ? 'Patient' : ''));
+  const patientPhone = careCircle?.patientPhone;
+  const date = todayISO();
+  const last7Dates = useMemo(() => getLast7Dates(date), [date]);
+
+  const handlePairSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const raw = inviteCodeInput.trim().toUpperCase();
+    if (!raw) {
+      setPairError('Invite code is required.');
+      return;
+    }
+    setIsPairing(true);
+    setPairError(null);
+    try {
+      const caregiverInfo = {
+        uid: currentUid || 'caregiver',
+        displayName: userProfile?.displayName || firebaseUser?.displayName || 'Caregiver',
+        email: userProfile?.email || firebaseUser?.email || '',
+      };
+      const circle = await redeemCareInviteCode(raw, caregiverInfo);
+      setInviteCodeInput('');
+      setLinkedCircles((prev) =>
+        prev.some((c) => c.patientId === circle.patientId) ? prev : [...prev, circle]
+      );
+      setSelectedPatientId(circle.patientId);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to redeem invite code.';
+      setPairError(message);
+    } finally {
+      setIsPairing(false);
+    }
+  };
 
   useEffect(() => {
-    if (!patientId) return;
+    if (!patientId) {
+      setDoses([]);
+      setCareCircle(null);
+      setMedications([]);
+      setHistoryDoses([]);
+      setIsLoading(false);
+      setIsMedsLoading(false);
+      setIsHistoryLoading(false);
+      return;
+    }
 
     let cancelled = false;
     demoMedMutatedRef.current = false;
@@ -577,10 +681,32 @@ export function CaregiverDashboard() {
 
           {/* DESIGN.md §6.2: Patient Switcher Button */}
           <div className="flex items-center gap-3">
-            <div className="inline-flex items-center gap-2 px-3 py-2 rounded-btn bg-surface border border-slate-300 shadow-sm text-sm font-semibold text-ink-primary">
-              <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
-              Monitoring: <span className="text-brand-teal font-bold">{patientName}</span>
-            </div>
+            {isCaregiverRole && linkedCircles.length > 0 ? (
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-btn bg-surface border border-slate-300 shadow-sm text-sm font-semibold text-ink-primary">
+                <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                <label htmlFor="patient-switcher-select" className="text-ink-secondary text-xs font-bold uppercase tracking-wide">
+                  Monitoring:
+                </label>
+                <select
+                  id="patient-switcher-select"
+                  aria-label="Select patient"
+                  value={patientId ?? ''}
+                  onChange={(e) => setSelectedPatientId(e.target.value)}
+                  className="bg-transparent font-bold text-brand-teal focus:outline-none cursor-pointer py-1 pr-2"
+                >
+                  {linkedCircles.map((circle) => (
+                    <option key={circle.patientId} value={circle.patientId}>
+                      {circle.patientName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : isCaregiverRole && !patientId ? null : (
+              <div className="inline-flex items-center gap-2 px-3 py-2 rounded-btn bg-surface border border-slate-300 shadow-sm text-sm font-semibold text-ink-primary">
+                <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                Monitoring: <span className="text-brand-teal font-bold">{patientName}</span>
+              </div>
+            )}
           </div>
         </header>
 
@@ -594,6 +720,58 @@ export function CaregiverDashboard() {
             {errorMsg}
           </div>
         )}
+
+        {!patientId ? (
+          <div className="rounded-card bg-surface border border-slate-200 p-8 text-center space-y-4 max-w-xl mx-auto my-8">
+            <h2 className="text-xl font-bold text-ink-primary">
+              Link a Patient to Monitor
+            </h2>
+            <p className="text-sm text-ink-secondary">
+              Enter the patient invite code (format MED-XXXXXX) shared by your loved one to connect your care circle and monitor daily adherence.
+            </p>
+
+            {pairError && (
+              <div
+                role="alert"
+                aria-live="assertive"
+                className="rounded-md bg-alert-bg border border-alert-chip p-3 text-sm text-alert font-medium"
+              >
+                {pairError}
+              </div>
+            )}
+
+            <form onSubmit={handlePairSubmit} className="space-y-3 pt-2">
+              <div className="text-left">
+                <label
+                  htmlFor="invite-code-input"
+                  className="block text-xs font-bold text-ink-secondary mb-1 uppercase tracking-wider"
+                >
+                  Invite Code
+                </label>
+                <input
+                  id="invite-code-input"
+                  type="text"
+                  value={inviteCodeInput}
+                  onChange={(e) => {
+                    setInviteCodeInput(e.target.value);
+                    if (pairError) setPairError(null);
+                  }}
+                  placeholder="e.g. MED-AB12CD"
+                  className="w-full min-h-[44px] px-3.5 py-2 rounded-btn border border-slate-300 text-sm uppercase font-mono tracking-wider focus:outline-none focus:ring-2 focus:ring-brand-teal"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={isPairing}
+                className="w-full min-h-[44px] px-5 py-2.5 rounded-btn bg-brand-teal text-white text-sm font-bold hover:bg-brand-teal-dark focus:outline-none focus:ring-2 focus:ring-brand-teal focus:ring-offset-2 transition-colors disabled:opacity-50"
+              >
+                {isPairing ? 'Connecting…' : 'Connect Patient'}
+              </button>
+            </form>
+          </div>
+        ) : (
+          <>
 
         {/* DESIGN.md §6.3: High-Visibility Persistent Escalation Alert Banner */}
         {unconfirmedDoses.length > 0 && (
@@ -632,19 +810,21 @@ export function CaregiverDashboard() {
 
                     {/* Action buttons: Call Patient + Mark Resolved */}
                     <div className="flex items-center gap-2 shrink-0">
-                      <a
-                        href={`tel:${patientPhone}`}
-                        aria-label={`Call ${patientName} now at ${patientPhone}`}
-                        className="
-                          min-h-[44px] px-4 py-2 rounded-btn
-                          bg-alert text-white text-sm font-bold
-                          flex items-center gap-1.5 hover:bg-red-900 active:bg-red-950
-                          focus:outline-none focus:ring-2 focus:ring-alert focus:ring-offset-2
-                          shadow-sm transition-colors
-                        "
-                      >
-                        📞 Call {patientName.split(' ')[0]}
-                      </a>
+                      {patientPhone && (
+                        <a
+                          href={`tel:${patientPhone}`}
+                          aria-label={`Call ${patientName.split(' ')[0]} now at ${patientPhone}`}
+                          className="
+                            min-h-[44px] px-4 py-2 rounded-btn
+                            bg-alert text-white text-sm font-bold
+                            flex items-center gap-1.5 hover:bg-red-900 active:bg-red-950
+                            focus:outline-none focus:ring-2 focus:ring-alert focus:ring-offset-2
+                            shadow-sm transition-colors
+                          "
+                        >
+                          📞 Call {patientName.split(' ')[0]}
+                        </a>
+                      )}
 
                       <button
                         type="button"
@@ -815,9 +995,15 @@ export function CaregiverDashboard() {
                 <span className="text-xs font-semibold text-ink-secondary uppercase">
                   Active Members
                 </span>
-                <span className="text-xs text-brand-teal font-bold font-mono">
-                  Code: {careCircle?.inviteCode ?? 'MED-7892'}
-                </span>
+                {careCircle?.inviteCode ? (
+                  <span className="text-xs text-brand-teal font-bold font-mono">
+                    Code: {careCircle.inviteCode}
+                  </span>
+                ) : patientId === 'patient_ramesh' ? (
+                  <span className="text-xs text-brand-teal font-bold font-mono">
+                    Code: MED-7892
+                  </span>
+                ) : null}
               </div>
 
               <div className="space-y-3">
@@ -899,6 +1085,51 @@ export function CaregiverDashboard() {
                   + Invite Another Family Member
                 </button>
               </div>
+
+              {isCaregiverRole && (
+                <div className="mt-4 pt-3 border-t border-slate-100">
+                  <p className="text-xs font-bold text-ink-secondary uppercase tracking-wider mb-2">
+                    Link Another Patient
+                  </p>
+                  {pairError && (
+                    <div
+                      role="alert"
+                      aria-live="assertive"
+                      className="mb-2 p-2 rounded bg-alert-bg border border-alert-chip text-xs text-alert font-medium"
+                    >
+                      {pairError}
+                    </div>
+                  )}
+                  <form onSubmit={handlePairSubmit} className="space-y-2">
+                    <div>
+                      <label
+                        htmlFor="invite-code-input"
+                        className="block text-xs font-medium text-ink-secondary mb-1"
+                      >
+                        Invite Code
+                      </label>
+                      <input
+                        id="invite-code-input"
+                        type="text"
+                        value={inviteCodeInput}
+                        onChange={(e) => {
+                          setInviteCodeInput(e.target.value);
+                          if (pairError) setPairError(null);
+                        }}
+                        placeholder="e.g. MED-AB12CD"
+                        className="w-full px-3 py-1.5 border border-slate-300 rounded-btn text-xs font-mono uppercase tracking-wider focus:outline-none focus:ring-2 focus:ring-brand-teal"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={isPairing}
+                      className="w-full min-h-[38px] py-1.5 px-3 rounded-btn bg-brand-teal text-white text-xs font-bold hover:bg-brand-teal-dark focus:outline-none focus:ring-2 focus:ring-brand-teal focus:ring-offset-2 transition-colors disabled:opacity-50"
+                    >
+                      {isPairing ? 'Connecting…' : 'Connect Patient'}
+                    </button>
+                  </form>
+                </div>
+              )}
             </div>
           </section>
         </div>
@@ -1073,11 +1304,15 @@ export function CaregiverDashboard() {
         <CareCircleInviteModal
           isOpen={isInviteModalOpen}
           onClose={() => setIsInviteModalOpen(false)}
-          inviteCode={careCircle?.inviteCode ?? 'MED-7892'}
+          inviteCode={
+            careCircle?.inviteCode || (patientId === 'patient_ramesh' ? 'MED-7892' : '')
+          }
           existingEmails={existingInviteEmails}
           onInviteMember={handleInviteMember}
           patientName={patientName}
         />
+        </>
+      )}
       </div>
     </AppShell>
   );

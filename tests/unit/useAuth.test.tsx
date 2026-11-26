@@ -292,4 +292,117 @@ describe('useAuth', () => {
     expect(result.current.userProfile).toBeNull();
     expect(result.current.isDemo).toBe(false);
   });
+
+  it('exits demo mode and hydrates new real auth.currentUser on refreshUserProfile before onAuthStateChanged fires', async () => {
+    mockOnAuthStateChanged.mockImplementation(() => vi.fn());
+    const { result } = renderHook(() => useAuth());
+
+    act(() => {
+      result.current.loginAsDemo?.('elderly');
+    });
+    expect(result.current.isDemo).toBe(true);
+    expect(result.current.userProfile?.uid).toBe('patient_ramesh');
+
+    mockAuthState.currentUser = {
+      uid: 'real-after-demo',
+      email: 'real@medimate.local',
+    } as unknown as User;
+    mockGetUserDocument.mockResolvedValueOnce(
+      makeProfile({
+        uid: 'real-after-demo',
+        role: 'caregiver',
+        displayName: 'Real Caregiver',
+      })
+    );
+
+    await act(async () => {
+      await result.current.refreshUserProfile?.();
+    });
+
+    expect(mockGetUserDocument).toHaveBeenCalledWith('real-after-demo');
+    expect(result.current.isDemo).toBe(false);
+    expect(result.current.firebaseUser?.uid).toBe('real-after-demo');
+    expect(result.current.userProfile?.uid).toBe('real-after-demo');
+    expect(result.current.userProfile?.role).toBe('caregiver');
+    expect(result.current.userProfile?.displayName).toBe('Real Caregiver');
+  });
+
+  it('switches to new auth.currentUser on refreshUserProfile and clears prior userProfile if new doc is missing or fails', async () => {
+    let authCb: AuthCallback | null = null;
+    mockOnAuthStateChanged.mockImplementation((_auth, cb) => {
+      authCb = cb;
+      return vi.fn();
+    });
+
+    mockGetUserDocument.mockResolvedValueOnce(
+      makeProfile({ uid: 'user-A', role: 'elderly', displayName: 'User A' })
+    );
+
+    const { result } = renderHook(() => useAuth());
+
+    await act(async () => {
+      await authCb?.({ uid: 'user-A', email: 'a@medimate.local' } as unknown as User);
+    });
+    expect(result.current.userProfile?.uid).toBe('user-A');
+
+    // Switch to user-B before onAuthStateChanged emits
+    mockAuthState.currentUser = {
+      uid: 'user-B',
+      email: 'b@medimate.local',
+    } as unknown as User;
+    mockGetUserDocument.mockResolvedValueOnce(
+      makeProfile({ uid: 'user-B', role: 'caregiver', displayName: 'User B' })
+    );
+
+    await act(async () => {
+      await result.current.refreshUserProfile?.();
+    });
+
+    expect(mockGetUserDocument).toHaveBeenLastCalledWith('user-B');
+    expect(result.current.firebaseUser?.uid).toBe('user-B');
+    expect(result.current.userProfile?.uid).toBe('user-B');
+    expect(result.current.userProfile?.role).toBe('caregiver');
+
+    // Switch to user-C whose Firestore doc is missing -> must NOT retain user-B's profile
+    mockAuthState.currentUser = {
+      uid: 'user-C',
+      email: 'c@medimate.local',
+    } as unknown as User;
+    mockGetUserDocument.mockResolvedValueOnce(null);
+
+    await act(async () => {
+      await result.current.refreshUserProfile?.();
+    });
+
+    expect(mockGetUserDocument).toHaveBeenLastCalledWith('user-C');
+    expect(result.current.firebaseUser?.uid).toBe('user-C');
+    expect(result.current.userProfile).toBeNull();
+
+    // Switch to user-D whose getUserDocument rejects -> must NOT retain a prior profile
+    mockAuthState.currentUser = {
+      uid: 'user-B',
+      email: 'b@medimate.local',
+    } as unknown as User;
+    mockGetUserDocument.mockResolvedValueOnce(
+      makeProfile({ uid: 'user-B', role: 'caregiver', displayName: 'User B' })
+    );
+    await act(async () => {
+      await result.current.refreshUserProfile?.();
+    });
+    expect(result.current.userProfile?.uid).toBe('user-B');
+
+    mockAuthState.currentUser = {
+      uid: 'user-D',
+      email: 'd@medimate.local',
+    } as unknown as User;
+    mockGetUserDocument.mockRejectedValueOnce(new Error('network unavailable'));
+
+    await act(async () => {
+      await result.current.refreshUserProfile?.();
+    });
+
+    expect(mockGetUserDocument).toHaveBeenLastCalledWith('user-D');
+    expect(result.current.firebaseUser?.uid).toBe('user-D');
+    expect(result.current.userProfile).toBeNull();
+  });
 });

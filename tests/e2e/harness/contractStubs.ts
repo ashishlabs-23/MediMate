@@ -11,21 +11,21 @@ export interface DoseTransitionInput {
   scheduledTime: Date; // Time T
   currentTime: Date;
   snoozeCount: number; // 0 or 1
-  snoozeUntil?: Date | null;
-  takenAt?: Date | null;
-  action?: 'tapTaken' | 'tapSnooze' | 'markMissed';
+  snoozeUntil?: Date | null | undefined;
+  takenAt?: Date | null | undefined;
+  action?: 'tapTaken' | 'tapSnooze' | 'markMissed' | undefined;
 }
 
 export interface DoseTransitionResult {
   nextStatus: DoseStatus;
   snoozeCount: number;
-  snoozeUntil?: Date | null;
-  takenAt?: Date | null;
-  escalatedAt?: Date | null;
-  missedAt?: Date | null;
-  sendInitialReminder?: boolean;
-  sendGentleReminder?: boolean;
-  sendEscalationAlert?: boolean;
+  snoozeUntil?: Date | null | undefined;
+  takenAt?: Date | null | undefined;
+  escalatedAt?: Date | null | undefined;
+  missedAt?: Date | null | undefined;
+  sendInitialReminder?: boolean | undefined;
+  sendGentleReminder?: boolean | undefined;
+  sendEscalationAlert?: boolean | undefined;
 }
 
 export const SNOOZE_DURATION_MS = 10 * 60 * 1000;
@@ -420,7 +420,7 @@ export function createUserProfile(
     email: input.email.trim(),
     displayName: input.displayName.trim(),
     role: input.role as UserRole,
-    phoneNumber: input.phoneNumber,
+    ...(input.phoneNumber !== undefined ? { phoneNumber: input.phoneNumber } : {}),
     timezone: input.timezone?.trim() || 'UTC',
     fcmTokens: [],
     accessibilityPreferences: {

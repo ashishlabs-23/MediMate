@@ -343,7 +343,7 @@ export async function generateForDate(
     .where('active', '==', true)
     .get();
 
-  const medications: MedicationDoc[] = medsSnap.docs.map((d) => ({
+  const medications: MedicationDoc[] = medsSnap.docs.map((d: admin.firestore.QueryDocumentSnapshot) => ({
     id: d.id,
     ...(d.data() as Omit<MedicationDoc, 'id'>),
   }));

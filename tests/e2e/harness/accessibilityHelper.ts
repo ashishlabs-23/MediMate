@@ -4,7 +4,7 @@ export interface TouchTargetResult {
   passed: boolean;
   width: number;
   height: number;
-  reason?: string;
+  reason?: string | undefined;
 }
 
 export interface AriaComplianceResult {

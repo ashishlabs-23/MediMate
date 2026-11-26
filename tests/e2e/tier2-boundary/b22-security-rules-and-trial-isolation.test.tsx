@@ -8,8 +8,6 @@ import {
   MockFirestoreDb,
   PermissionDeniedError,
   createCareCircleFixture,
-  createDoseLogFixture,
-  createMedicationFixture,
   createUserFixture,
   seedPatientCareCircleScenario,
 } from '@harness/index';

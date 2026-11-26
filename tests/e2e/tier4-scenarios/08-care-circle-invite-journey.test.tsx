@@ -196,7 +196,8 @@ describe('Tier 4 — Scenario 08: Care Circle Invite & Onboarding Journey', () =
     ).toBe(true);
 
     const circleCard = document.getElementById('care-circle-members') ?? document.body;
-    expect(within(circleCard).getByText(/rohan\.sharma@example\.com|Rohan Sharma/i)).toBeInTheDocument();
+    expect(within(circleCard).getByText('rohan.sharma@example.com')).toBeInTheDocument();
+    expect(within(circleCard).getByText('Rohan Sharma')).toBeInTheDocument();
     expect(within(circleCard).getByText(/invited/i)).toBeInTheDocument();
     expect(alertSpy).not.toHaveBeenCalled();
   });

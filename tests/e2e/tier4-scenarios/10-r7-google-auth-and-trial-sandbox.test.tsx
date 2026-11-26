@@ -16,30 +16,31 @@ import {
 } from '@harness/reactTestHelper';
 import type { DoseLogDocument } from '@/types/firestore';
 
-const signInWithEmailAndPasswordMock = vi.fn();
-const createUserWithEmailAndPasswordMock = vi.fn();
-const signInWithPopupMock = vi.fn();
-const signInWithRedirectMock = vi.fn();
-const getRedirectResultMock = vi.fn(async () => null);
-const sendPasswordResetEmailMock = vi.fn();
-const firebaseSignOutMock = vi.fn(async () => {});
+const signInWithEmailAndPasswordMock = vi.fn<(...args: unknown[]) => Promise<unknown>>();
+const createUserWithEmailAndPasswordMock = vi.fn<(...args: unknown[]) => Promise<unknown>>();
+const signInWithPopupMock = vi.fn<(...args: unknown[]) => Promise<unknown>>();
+const signInWithRedirectMock = vi.fn<(...args: unknown[]) => Promise<unknown>>();
+const getRedirectResultMock = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => null);
+const sendPasswordResetEmailMock = vi.fn<(...args: unknown[]) => Promise<void>>();
+const firebaseSignOutMock = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
 
-class MockGoogleAuthProvider {
-  setCustomParameters = vi.fn();
-}
-
-vi.mock('firebase/auth', () => ({
-  signInWithEmailAndPassword: (...args: unknown[]) => signInWithEmailAndPasswordMock(...args),
-  createUserWithEmailAndPassword: (...args: unknown[]) =>
-    createUserWithEmailAndPasswordMock(...args),
-  signInWithPopup: (...args: unknown[]) => signInWithPopupMock(...args),
-  signInWithRedirect: (...args: unknown[]) => signInWithRedirectMock(...args),
-  getRedirectResult: (...args: unknown[]) => getRedirectResultMock(...args),
-  updateProfile: vi.fn(async () => {}),
-  signOut: (...args: unknown[]) => firebaseSignOutMock(...args),
-  sendPasswordResetEmail: (...args: unknown[]) => sendPasswordResetEmailMock(...args),
-  GoogleAuthProvider: MockGoogleAuthProvider,
-}));
+vi.mock('firebase/auth', () => {
+  class MockGoogleAuthProvider {
+    setCustomParameters = vi.fn();
+  }
+  return {
+    signInWithEmailAndPassword: (...args: unknown[]) => signInWithEmailAndPasswordMock(...args),
+    createUserWithEmailAndPassword: (...args: unknown[]) =>
+      createUserWithEmailAndPasswordMock(...args),
+    signInWithPopup: (...args: unknown[]) => signInWithPopupMock(...args),
+    signInWithRedirect: (...args: unknown[]) => signInWithRedirectMock(...args),
+    getRedirectResult: (...args: unknown[]) => getRedirectResultMock(...args),
+    updateProfile: vi.fn(async () => {}),
+    signOut: (...args: unknown[]) => firebaseSignOutMock(...args),
+    sendPasswordResetEmail: (...args: unknown[]) => sendPasswordResetEmailMock(...args),
+    GoogleAuthProvider: MockGoogleAuthProvider,
+  };
+});
 
 const mockDb = new MockFirestoreDb();
 const bridge = createMockFirestoreAdapter(mockDb, () => ({
@@ -47,8 +48,8 @@ const bridge = createMockFirestoreAdapter(mockDb, () => ({
   role: 'elderly',
 }));
 
-const getUserDocumentMock = vi.fn();
-const upsertUserDocumentMock = vi.fn(async () => {});
+const getUserDocumentMock = vi.fn<(...args: unknown[]) => Promise<unknown>>();
+const upsertUserDocumentMock = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
 const updateDoseLogSpy = vi.fn(
   async (doseId: string, patch: Partial<Omit<DoseLogDocument, 'id' | 'patientId' | 'createdAt'>>) =>
     bridge.updateDoseLog(doseId, patch)
@@ -242,7 +243,7 @@ describe('Tier 4 — Scenario 10: Google Auth Recovery & Trial Mode Sandbox Isol
       await waitFor(() => {
         expect(upsertUserDocumentMock).toHaveBeenCalledTimes(1);
       });
-      const [, doc] = upsertUserDocumentMock.mock.calls[0] as [string, Record<string, unknown>];
+      const [, doc] = upsertUserDocumentMock.mock.calls[0] as unknown as [string, Record<string, unknown>];
       expect(doc.timezone).toBe(expectedTz);
       expect(doc.role).toBe('caregiver');
       expect(refreshSpy).toHaveBeenCalledTimes(1);

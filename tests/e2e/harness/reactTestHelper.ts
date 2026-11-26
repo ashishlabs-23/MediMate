@@ -416,9 +416,9 @@ export function toDoseLogDocument(raw: Record<string, unknown>): DoseLogDocument
     medicationId: String(raw.medicationId ?? ''),
     medicationName: String(raw.medicationName ?? ''),
     dosage: String(raw.dosage ?? ''),
-    instructions: raw.instructions ? String(raw.instructions) : undefined,
-    color: raw.color ? String(raw.color) : undefined,
-    shape: (raw.shape as DoseLogDocument['shape']) ?? undefined,
+    ...(raw.instructions ? { instructions: String(raw.instructions) } : {}),
+    ...(raw.color ? { color: String(raw.color) } : {}),
+    ...(raw.shape ? { shape: raw.shape as NonNullable<DoseLogDocument['shape']> } : {}),
     scheduledDate: String(raw.scheduledDate ?? ''),
     scheduledTime: toTimestamp(raw.scheduledTime),
     status: (raw.status as DoseLogDocument['status']) ?? 'scheduled',
@@ -470,7 +470,7 @@ export function toCareCircleDocument(raw: Record<string, unknown>): ExtendedCare
     id: String(raw.id ?? ''),
     patientId: String(raw.patientId ?? ''),
     patientName: String(raw.patientName ?? 'Patient'),
-    patientPhone: raw.patientPhone ? String(raw.patientPhone) : undefined,
+    ...(raw.patientPhone ? { patientPhone: String(raw.patientPhone) } : {}),
     caregiverIds: Array.isArray(raw.caregiverIds) ? raw.caregiverIds.map(String) : [],
     members: membersRaw.map((m) => {
       const rec = m as Record<string, unknown>;
@@ -482,13 +482,13 @@ export function toCareCircleDocument(raw: Record<string, unknown>): ExtendedCare
         permissions: (Array.isArray(rec.permissions) ? rec.permissions : []) as CareCircleDocument['members'][number]['permissions'],
         status: (rec.status as 'active' | 'invited' | 'declined') ?? 'active',
         invitedAt: toTimestamp(rec.invitedAt),
-        joinedAt: rec.joinedAt ? toTimestamp(rec.joinedAt) : undefined,
+        ...(rec.joinedAt ? { joinedAt: toTimestamp(rec.joinedAt) } : {}),
       };
     }),
-    inviteCode: raw.inviteCode ? String(raw.inviteCode) : undefined,
-    lastRedeemedInviteCode: raw.lastRedeemedInviteCode
-      ? String(raw.lastRedeemedInviteCode)
-      : undefined,
+    ...(raw.inviteCode ? { inviteCode: String(raw.inviteCode) } : {}),
+    ...(raw.lastRedeemedInviteCode
+      ? { lastRedeemedInviteCode: String(raw.lastRedeemedInviteCode) }
+      : {}),
     createdAt: toTimestamp(raw.createdAt),
     updatedAt: toTimestamp(raw.updatedAt),
   };

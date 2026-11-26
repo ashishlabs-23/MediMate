@@ -4,7 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthProvider } from '@/contexts/AuthContext';
-import { MockFirestoreDb, createMedicationFixture, seedPatientCareCircleScenario } from '@harness/index';
+import { MockFirestoreDb, seedPatientCareCircleScenario, type FirestoreRecord } from '@harness/index';
 import {
   PROJECT_ROOT,
   createBeforeInstallPromptEvent,
@@ -129,11 +129,11 @@ describe('Tier 1 — F14: Prescription CRUD, 7-Day Adherence History & Offline P
       fireEvent.click(submitBtn);
 
       await waitFor(() => {
-        const meds = mockDb.inspectCollection<MedicationDocument>('medications');
+        const meds = mockDb.inspectCollection<MedicationDocument & FirestoreRecord>('medications');
         expect(meds.some((m) => m.name === 'Vitamin D3' && m.dosage === '1000 IU')).toBe(true);
       });
 
-      const logs = mockDb.inspectCollection<DoseLogDocument>('dose_logs');
+      const logs = mockDb.inspectCollection<DoseLogDocument & FirestoreRecord>('dose_logs');
       expect(logs.some((l) => l.medicationName === 'Vitamin D3')).toBe(true);
     }
   );
@@ -160,7 +160,7 @@ describe('Tier 1 — F14: Prescription CRUD, 7-Day Adherence History & Offline P
       fireEvent.click(within(dialog).getByRole('button', { name: /save|update/i }));
 
       await waitFor(() => {
-        const updated = mockDb.inspectDoc<MedicationDocument>('medications', 'med_metformin');
+        const updated = mockDb.inspectDoc<MedicationDocument & FirestoreRecord>('medications', 'med_metformin');
         expect(updated?.dosage).toBe('850 mg');
       });
     }
@@ -181,7 +181,7 @@ describe('Tier 1 — F14: Prescription CRUD, 7-Day Adherence History & Offline P
       fireEvent.click(pauseBtn);
 
       await waitFor(() => {
-        const med = mockDb.inspectDoc<MedicationDocument>('medications', 'med_metformin');
+        const med = mockDb.inspectDoc<MedicationDocument & FirestoreRecord>('medications', 'med_metformin');
         expect(med?.active).toBe(false);
       });
 
@@ -189,7 +189,7 @@ describe('Tier 1 — F14: Prescription CRUD, 7-Day Adherence History & Offline P
       fireEvent.click(resumeBtn);
 
       await waitFor(() => {
-        const med = mockDb.inspectDoc<MedicationDocument>('medications', 'med_metformin');
+        const med = mockDb.inspectDoc<MedicationDocument & FirestoreRecord>('medications', 'med_metformin');
         expect(med?.active).toBe(true);
       });
     }

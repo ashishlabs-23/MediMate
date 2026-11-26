@@ -29,8 +29,8 @@ interface SubscriptionEntry<T extends FirestoreRecord> {
   predicate: (doc: T) => boolean;
   callback: (docs: T[]) => void;
   auth: AuthContext | null;
-  onError?: (error: Error) => void;
-  targetPatientId?: string;
+  onError?: ((error: Error) => void) | undefined;
+  targetPatientId?: string | undefined;
 }
 
 function cloneValue<T>(value: T): T {

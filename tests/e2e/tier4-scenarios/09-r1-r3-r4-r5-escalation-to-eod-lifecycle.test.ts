@@ -28,8 +28,8 @@ vi.mock('firebase-functions', () => ({
   },
 }));
 
-const getDoseLogMock = vi.fn();
-const updateDoseLogSpy = vi.fn(async () => {});
+const getDoseLogMock = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => null);
+const updateDoseLogSpy = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
 
 vi.mock('@/lib/firebase', () => ({
   firebaseApp: {},
@@ -100,6 +100,7 @@ describe('Tier 4 — Scenario 09: 24h Cross-Layer Escalation to EOD Closeout Lif
 
   beforeEach(() => {
     getDoseLogMock.mockReset();
+    getDoseLogMock.mockResolvedValue(null);
     updateDoseLogSpy.mockClear();
   });
 
@@ -203,15 +204,19 @@ describe('Tier 4 — Scenario 09: 24h Cross-Layer Escalation to EOD Closeout Lif
       };
       getDoseLogMock.mockResolvedValue({ ...clientDose, status: 'due', followUpSent: true });
 
-      renderHook(() => useReminderScheduler([clientDose], 'patient_ny'));
+      const { unmount } = renderHook(() => useReminderScheduler([clientDose], 'patient_ny'));
       await act(async () => {
         await vi.advanceTimersByTimeAsync(30 * 60 * 1000 + 2000);
       });
 
-      const unconfirmedPatch = updateDoseLogSpy.mock.calls.find(
-        ([id, p]) => id === doseId && (p as { status?: string }).status === 'unconfirmed'
-      )?.[1] as Record<string, unknown> | undefined;
+      const calls = updateDoseLogSpy.mock.calls as unknown as Array<
+        [string, Record<string, unknown>]
+      >;
+      const unconfirmedPatch = calls.find(
+        ([id, p]) => id === doseId && p.status === 'unconfirmed'
+      )?.[1];
       expect(unconfirmedPatch).toEqual({ status: 'unconfirmed' });
+      unmount();
       vi.useRealTimers();
 
       await adminDb.collection('dose_logs').doc(doseId).update(unconfirmedPatch!);

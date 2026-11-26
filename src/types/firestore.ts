@@ -62,9 +62,22 @@ export interface CareCircleDocument {
   id: string;
   patientId: string;
   patientName: string;
+  patientPhone?: string;
   caregiverIds: string[];
   members: CareCircleMember[];
   inviteCode?: string;
+  lastRedeemedInviteCode?: string;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export interface CareInviteDocument {
+  id: string;
+  code: string;
+  patientId: string;
+  patientName: string;
+  createdBy: string;
+  active: boolean;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }

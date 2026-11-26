@@ -122,15 +122,16 @@ describe('Tier 4 — Scenario 5: Snooze Abuse Attempt (F4, F5, F6)', () => {
     ).toThrow(PermissionDeniedError);
 
     // Step 5: T + 30m (10:30:00Z) — Escalation deadline preserved
+    // R1: client T+30m transition marks status: 'unconfirmed' with snoozeUntil: null ONLY;
+    // backend/Functions escalation sends caregiver FCM and sets escalationAlertSent: true / escalatedAt.
     timeTravel.advanceToEscalation(scheduledT);
     const escResult = sim.tick();
     expect(escResult.nextStatus).toBe('unconfirmed');
     expect(escResult.sendEscalationAlert).toBe(true);
     expect(sim.getDose().status).toBe('unconfirmed');
-    expect(sim.getDose().escalationAlertSent).toBe(true);
-    expect(sim.getDose().escalatedAt?.getTime()).toBe(
-      new Date('2026-11-25T10:30:00.000Z').getTime()
-    );
+    expect(sim.getDose().snoozeUntil).toBeNull();
+    expect(sim.getDose().escalationAlertSent).toBe(false);
+    expect(sim.getDose().escalatedAt).toBeNull();
 
     timeTravel.reset();
   });

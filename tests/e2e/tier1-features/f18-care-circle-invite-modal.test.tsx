@@ -219,7 +219,8 @@ describe('Tier 1 — F18: Care Circle Invite Modal (Phase 4D / R4)', () => {
 
     const circleSection = document.getElementById('care-circle-members') ?? document.body;
     await waitFor(() => {
-      expect(within(circleSection).getByText(/asha\.sharma@example\.com|Asha Sharma/i)).toBeInTheDocument();
+      expect(within(circleSection).getByText('asha.sharma@example.com')).toBeInTheDocument();
+      expect(within(circleSection).getByText('Asha Sharma')).toBeInTheDocument();
       expect(within(circleSection).getByText(/invited/i)).toBeInTheDocument();
     });
   });
@@ -272,7 +273,7 @@ describe('Tier 1 — F18: Care Circle Invite Modal (Phase 4D / R4)', () => {
     }
 
     const writeScheduleToggle = within(dialog).queryByRole('checkbox', {
-      name: /schedule|edit|write/i,
+      name: /edit.*write|write prescriptions/i,
     });
     if (writeScheduleToggle && !(writeScheduleToggle as HTMLInputElement).checked) {
       fireEvent.click(writeScheduleToggle);
