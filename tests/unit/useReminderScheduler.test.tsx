@@ -595,4 +595,152 @@ describe('useReminderScheduler — R1-FE & R2-FE', () => {
 
     expect(onDemoDoseUpdate).not.toHaveBeenCalled();
   });
+
+  it('STRESS 1: snoozeUntil > escalationMs (08:21/08:25 snooze crossing T+30m 08:30) escalates to unconfirmed instead of stranding in snoozed', async () => {
+    // Non-demo: 08:00 dose snoozed at 08:25 until 08:35 (> escalationMs 08:30)
+    vi.setSystemTime(new Date(2026, 10, 25, 8, 25, 0, 0));
+    const crossingDose = makeDose({
+      id: 'dose-snooze-cross',
+      scheduledTime: Timestamp.fromDate(new Date(2026, 10, 25, 8, 0, 0, 0)),
+      status: 'snoozed',
+      snoozeCount: 1,
+      snoozedAt: Timestamp.fromDate(new Date(2026, 10, 25, 8, 25, 0, 0)),
+      snoozeUntil: Timestamp.fromDate(new Date(2026, 10, 25, 8, 35, 0, 0)),
+      followUpSent: true,
+      escalationAlertSent: false,
+    });
+    mockGetDoseLog.mockResolvedValue(crossingDose);
+
+    const { unmount } = render(
+      <SchedulerHarness doses={[crossingDose]} patientId="patient-1" />
+    );
+
+    // Advance 5 min to 08:30 (T+30m) -> overrides active snooze and escalates to unconfirmed
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+    });
+    expect(mockUpdateDoseLog).toHaveBeenCalledTimes(1);
+    expect(mockUpdateDoseLog).toHaveBeenCalledWith('dose-snooze-cross', {
+      status: 'unconfirmed',
+    });
+    expect(
+      notifStub.calls.filter((c) => c.options?.tag === 'escalation-dose-snooze-cross')
+    ).toHaveLength(1);
+
+    // Advance another 10 min to 08:40 (past 08:35 snoozeUntil) -> no revert to due and no duplicate escalation
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+    });
+    expect(mockUpdateDoseLog).toHaveBeenCalledTimes(1);
+    expect(
+      notifStub.calls.some((c) => c.options?.tag === 'snooze-expired-dose-snooze-cross')
+    ).toBe(false);
+    unmount();
+
+    // Demo mode belt-and-suspenders: snoozeUntil == 08:31 with clock jumping past 08:30 directly via snoozeExpiredDelay
+    vi.setSystemTime(new Date(2026, 10, 25, 8, 21, 0, 0));
+    mockUpdateDoseLog.mockClear();
+    notifStub.calls.length = 0;
+
+    const demoPatches: Array<{ doseId: string; patch: DoseSchedulerPatch }> = [];
+    const demoCrossingDose = makeDose({
+      id: 'dose-demo-cross',
+      patientId: 'patient_ramesh',
+      scheduledTime: Timestamp.fromDate(new Date(2026, 10, 25, 8, 0, 0, 0)),
+      status: 'snoozed',
+      snoozeCount: 1,
+      snoozedAt: Timestamp.fromDate(new Date(2026, 10, 25, 8, 21, 0, 0)),
+      snoozeUntil: Timestamp.fromDate(new Date(2026, 10, 25, 8, 31, 0, 0)),
+      followUpSent: true,
+      escalationAlertSent: false,
+    });
+
+    render(
+      <SchedulerHarness
+        doses={[demoCrossingDose]}
+        patientId="patient_ramesh"
+        options={{
+          isDemoSession: true,
+          onDemoDoseUpdate: (doseId, patch) => {
+            demoPatches.push({ doseId, patch });
+          },
+        }}
+      />
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+    });
+
+    expect(demoPatches).toEqual([
+      { doseId: 'dose-demo-cross', patch: { status: 'unconfirmed' } },
+    ]);
+    expect(
+      notifStub.calls.filter((c) => c.options?.tag === 'escalation-dose-demo-cross')
+    ).toHaveLength(1);
+    expect(mockUpdateDoseLog).not.toHaveBeenCalled();
+  });
+
+  it('STRESS 2: preserves post-snooze gentle reminder when snoozedAt is absent and snoozeCount is 0', async () => {
+    vi.setSystemTime(new Date(2026, 10, 25, 8, 8, 0, 0));
+    const patches: Array<{ doseId: string; patch: DoseSchedulerPatch }> = [];
+
+    const snoozedCountZero = makeDose({
+      id: 'dose-c2-count0',
+      scheduledTime: Timestamp.fromDate(new Date(2026, 10, 25, 8, 0, 0, 0)),
+      status: 'snoozed',
+      snoozeCount: 0,
+      snoozedAt: null,
+      snoozeUntil: Timestamp.fromDate(new Date(2026, 10, 25, 8, 18, 0, 0)),
+      followUpSent: false,
+      escalationAlertSent: false,
+    });
+
+    let currentDose = snoozedCountZero;
+    const { rerender } = render(
+      <SchedulerHarness
+        doses={[currentDose]}
+        patientId="patient-1"
+        options={{
+          isDemoSession: true,
+          onDemoDoseUpdate: (doseId, patch) => {
+            patches.push({ doseId, patch });
+            currentDose = { ...currentDose, ...patch };
+          },
+        }}
+      />
+    );
+
+    // At 08:18, snooze expires -> { status: 'due', snoozeUntil: null } -> parent re-renders with snoozeCount: 0, snoozedAt: null
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+    });
+    expect(patches).toEqual([
+      { doseId: 'dose-c2-count0', patch: { status: 'due', snoozeUntil: null } },
+    ]);
+
+    rerender(
+      <SchedulerHarness
+        doses={[currentDose]}
+        patientId="patient-1"
+        options={{
+          isDemoSession: true,
+          onDemoDoseUpdate: (doseId, patch) => {
+            patches.push({ doseId, patch });
+            currentDose = { ...currentDose, ...patch };
+          },
+        }}
+      />
+    );
+
+    // At 08:28 (snoozeUntil 08:18 + 10m < 08:30 escalation), post-snooze gentle reminder fires
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+    });
+    expect(patches).toContainEqual({
+      doseId: 'dose-c2-count0',
+      patch: { followUpSent: true },
+    });
+    expect(notifStub.calls.some((c) => c.options?.tag === 'gentle-dose-c2-count0')).toBe(true);
+  });
 });

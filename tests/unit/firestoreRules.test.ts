@@ -118,11 +118,8 @@ function evaluateRule(
         existing !== null &&
         currentUid === docId &&
         next.uid === docId &&
-        !(
-          'role' in existing &&
-          existing.role === 'elderly' &&
-          next.role !== 'elderly'
-        )
+        ('role' in existing) === ('role' in next) &&
+        (!('role' in existing) || next.role === existing.role)
       );
     }
     return false;
@@ -258,6 +255,7 @@ function evaluateRule(
       canAccessPatient(existing.patientId) &&
       next.patientId === existing.patientId &&
       existing.status !== 'taken' &&
+      existing.status !== 'missed' &&
       typeof next.snoozeCount === 'number' &&
       Number.isInteger(next.snoozeCount) &&
       typeof existing.snoozeCount === 'number' &&
@@ -361,6 +359,12 @@ function createSeededStore(): PolicyStore {
         status: 'taken',
         snoozeCount: 0,
       },
+      dose_missed: {
+        id: 'dose_missed',
+        patientId: 'patient_1',
+        status: 'missed',
+        snoozeCount: 0,
+      },
     },
   };
 }
@@ -374,11 +378,11 @@ describe('firestore.rules — R2 & R6 Security Rules Verification', () => {
       expect(rulesSource).not.toContain('patient_ramesh');
     });
 
-    it('enforces isAuthed(), role escalation lock, and delete=false on /users/{userId}', () => {
+    it('enforces isAuthed(), role immutability, and delete=false on /users/{userId}', () => {
       const block = extractMatchBlock(rulesSource, 'match /users/{userId}');
       expect(block).toContain('isAuthed()');
-      expect(block).toContain("'role' in resource.data");
-      expect(block).toContain("resource.data.role == 'elderly' && request.resource.data.role != 'elderly'");
+      expect(block).toContain("(('role' in resource.data) == ('role' in request.resource.data))");
+      expect(block).toContain("request.resource.data.role == resource.data.role");
       expect(block).toContain('allow delete: if false;');
     });
 
@@ -421,6 +425,7 @@ describe('firestore.rules — R2 & R6 Security Rules Verification', () => {
       const doseBlock = extractMatchBlock(rulesSource, 'match /dose_logs/{doseLogId}');
       expect(doseBlock).toContain('request.resource.data.snoozeCount == 0');
       expect(doseBlock).toContain("resource.data.status != 'taken'");
+      expect(doseBlock).toContain("resource.data.status != 'missed'");
       expect(doseBlock).toContain('request.resource.data.snoozeCount is int');
       expect(doseBlock).toContain('request.resource.data.snoozeCount >= resource.data.snoozeCount');
       expect(doseBlock).toContain('request.resource.data.snoozeCount <= 1');
@@ -429,6 +434,50 @@ describe('firestore.rules — R2 & R6 Security Rules Verification', () => {
   });
 
   describe('Policy matrix evaluation (R2, R6 & invariants)', () => {
+    it('allows initial role assignment at account creation and locks persisted roles on updates', () => {
+      const store = createSeededStore();
+      const elderly: AuthToken = { uid: 'new_patient' };
+      const caregiver: AuthToken = { uid: 'new_caregiver' };
+
+      expect(
+        evaluateRule(store, elderly, 'users', 'new_patient', 'create', {
+          uid: 'new_patient',
+          role: 'elderly',
+        })
+      ).toBe(true);
+      expect(
+        evaluateRule(store, caregiver, 'users', 'new_caregiver', 'create', {
+          uid: 'new_caregiver',
+          role: 'caregiver',
+        })
+      ).toBe(true);
+
+      expect(
+        evaluateRule(store, { uid: 'caregiver_1' }, 'users', 'caregiver_1', 'update', {
+          ...store.users.caregiver_1,
+          displayName: 'Priya Updated',
+        })
+      ).toBe(true);
+      expect(
+        evaluateRule(store, { uid: 'caregiver_1' }, 'users', 'caregiver_1', 'update', {
+          ...store.users.caregiver_1,
+          role: 'elderly',
+        })
+      ).toBe(false);
+      expect(
+        evaluateRule(store, { uid: 'patient_1' }, 'users', 'patient_1', 'update', {
+          ...store.users.patient_1,
+          role: 'caregiver',
+        })
+      ).toBe(false);
+      expect(
+        evaluateRule(store, { uid: 'patient_1' }, 'users', 'patient_1', 'update', {
+          ...store.users.patient_1,
+          displayName: 'Asha Updated',
+        })
+      ).toBe(true);
+    });
+
     it('R2: blocks all unauthenticated and arbitrary authenticated access to patient_ramesh', () => {
       const store = createSeededStore();
 
@@ -586,17 +635,10 @@ describe('firestore.rules — R2 & R6 Security Rules Verification', () => {
       ).toBe(false);
     });
 
-    it('preserves elderly role lock, taken-lock, snoozeCount<=1, patientId immutability, and delete locks', () => {
+    it('preserves taken-lock, snoozeCount<=1, patientId immutability, and delete locks', () => {
       const store = createSeededStore();
       const patient: AuthToken = { uid: 'patient_1' };
 
-      // Elderly role cannot promote to caregiver/dual
-      expect(
-        evaluateRule(store, patient, 'users', 'patient_1', 'update', {
-          uid: 'patient_1',
-          role: 'caregiver',
-        })
-      ).toBe(false);
       expect(evaluateRule(store, patient, 'users', 'patient_1', 'delete')).toBe(false);
 
       // dose_logs invariants
@@ -624,6 +666,19 @@ describe('firestore.rules — R2 & R6 Security Rules Verification', () => {
           ...store.dose_logs.dose_taken,
           status: 'taken',
           takenBy: 'spoofed',
+        })
+      ).toBe(false);
+      // Missed-lock prevents patient or caregiver from overwriting EOD-closed 'missed' doses
+      expect(
+        evaluateRule(store, patient, 'dose_logs', 'dose_missed', 'update', {
+          ...store.dose_logs.dose_missed,
+          status: 'taken',
+        })
+      ).toBe(false);
+      expect(
+        evaluateRule(store, { uid: 'caregiver_1' }, 'dose_logs', 'dose_missed', 'update', {
+          ...store.dose_logs.dose_missed,
+          status: 'due',
         })
       ).toBe(false);
       expect(

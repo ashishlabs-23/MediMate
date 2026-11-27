@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { Timestamp } from 'firebase/firestore';
 import type { User } from 'firebase/auth';
 import { LoginScreen } from '../../src/components/auth/LoginScreen';
@@ -17,9 +17,11 @@ const {
   mockSignInWithRedirect,
   mockGetRedirectResult,
   mockFirebaseSignOut,
+  mockSendEmailVerification,
   mockSendPasswordResetEmail,
   mockSetCustomParameters,
   mockGetUserDocument,
+  mockSaveUserProfileWithUsername,
   mockUpsertUserDocument,
 } = vi.hoisted(() => ({
   mockAuthObj: { name: 'mock-auth' },
@@ -29,9 +31,13 @@ const {
   mockSignInWithRedirect: vi.fn(),
   mockGetRedirectResult: vi.fn(),
   mockFirebaseSignOut: vi.fn(),
+  mockSendEmailVerification: vi.fn(),
   mockSendPasswordResetEmail: vi.fn(),
   mockSetCustomParameters: vi.fn(),
   mockGetUserDocument: vi.fn<(uid: string) => Promise<UserDocument | null>>(),
+  mockSaveUserProfileWithUsername: vi.fn<
+    (uid: string, username: string, initialProfile?: Omit<UserDocument, 'createdAt' | 'updatedAt' | 'username'>) => Promise<void>
+  >(),
   mockUpsertUserDocument: vi.fn<
     (uid: string, data: Omit<UserDocument, 'createdAt' | 'updatedAt'>) => Promise<void>
   >(),
@@ -39,6 +45,7 @@ const {
 
 vi.mock('../../src/lib/firebase', () => ({
   auth: mockAuthObj,
+  authPersistenceReady: Promise.resolve(),
 }));
 
 vi.mock('firebase/auth', () => {
@@ -54,11 +61,17 @@ vi.mock('firebase/auth', () => {
     getRedirectResult: (...args: unknown[]) => mockGetRedirectResult(...args),
     signOut: (...args: unknown[]) => mockFirebaseSignOut(...args),
     sendPasswordResetEmail: (...args: unknown[]) => mockSendPasswordResetEmail(...args),
+    sendEmailVerification: (...args: unknown[]) => mockSendEmailVerification(...args),
   };
 });
 
 vi.mock('../../src/lib/firestore', () => ({
   getUserDocument: (uid: string) => mockGetUserDocument(uid),
+  saveUserProfileWithUsername: (
+    uid: string,
+    username: string,
+    initialProfile?: Omit<UserDocument, 'createdAt' | 'updatedAt' | 'username'>
+  ) => mockSaveUserProfileWithUsername(uid, username, initialProfile),
   upsertUserDocument: (uid: string, data: Omit<UserDocument, 'createdAt' | 'updatedAt'>) =>
     mockUpsertUserDocument(uid, data),
 }));
@@ -69,6 +82,7 @@ function makeUserDoc(overrides?: Partial<UserDocument>): UserDocument {
     uid: 'user-123',
     email: 'user@example.com',
     displayName: 'Kamala Iyer',
+    username: 'kamala_iyer',
     role: 'elderly',
     timezone: 'America/New_York',
     fcmTokens: [],
@@ -106,6 +120,8 @@ function renderLoginScreen(options?: {
       <MemoryRouter initialEntries={[options?.initialEntry ?? '/login']}>
         <Routes>
           <Route path="/login" element={<LoginScreen />} />
+          <Route path="/verify-email" element={<div data-testid="route-verify-email">Verify Email</div>} />
+          <Route path="/complete-profile" element={<CompleteProfileRouteStub />} />
           <Route path="/app/today" element={<div data-testid="route-today">Today View</div>} />
           <Route path="/app/caregiver" element={<div data-testid="route-caregiver">Caregiver View</div>} />
         </Routes>
@@ -116,6 +132,18 @@ function renderLoginScreen(options?: {
   return { ...view, loginAsDemo, refreshUserProfile };
 }
 
+function CompleteProfileRouteStub() {
+  const location = useLocation();
+  return (
+    <div
+      data-testid="route-complete-profile"
+      data-onboarding-role={location.state?.onboardingRole}
+    >
+      Complete Profile
+    </div>
+  );
+}
+
 describe('LoginScreen', () => {
   beforeEach(() => {
     sessionStorage.clear();
@@ -123,7 +151,9 @@ describe('LoginScreen', () => {
     mockGetUserDocument.mockResolvedValue(null);
     mockUpsertUserDocument.mockResolvedValue(undefined);
     mockFirebaseSignOut.mockResolvedValue(undefined);
+    mockSendEmailVerification.mockResolvedValue(undefined);
     mockSendPasswordResetEmail.mockResolvedValue(undefined);
+    mockSaveUserProfileWithUsername.mockResolvedValue(undefined);
     mockSignInWithRedirect.mockResolvedValue(undefined);
   });
 
@@ -138,14 +168,14 @@ describe('LoginScreen', () => {
     renderLoginScreen();
     await act(async () => {});
 
-    // Default tab is Sign In; role selector and full name are hidden
+    // Default tab is Sign In; role selector and username are hidden
     expect(screen.getByRole('tab', { name: 'Sign In' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tab', { name: 'Create New Account' })).toHaveAttribute(
       'aria-selected',
       'false'
     );
     expect(screen.queryByRole('radiogroup', { name: 'Select User Role' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/display name/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Username')).not.toBeInTheDocument();
 
     // Unique button matching /sign in/i (Google button is "Continue with Google", trial buttons avoid "sign in")
     const signInBtn = screen.getByRole('button', { name: /sign in/i });
@@ -205,7 +235,7 @@ describe('LoginScreen', () => {
     expect(screen.getByTestId('route-today')).toBeInTheDocument();
   });
 
-  it('creates account with dynamic browser timezone, refreshes profile, and navigates for chosen role', async () => {
+  it('creates an account with validated username, sends verification, and preserves the selected role', async () => {
     const dateTimeSpy = vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(
       () =>
         ({
@@ -223,14 +253,14 @@ describe('LoginScreen', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Create New Account' }));
     fireEvent.click(screen.getByRole('radio', { name: /Family Caregiver/i }));
-    fireEvent.change(screen.getByLabelText(/Display Name/i), {
+    fireEvent.change(screen.getByLabelText(/Username/), {
       target: { value: '  Anita Rao  ' },
     });
     fireEvent.change(screen.getByLabelText('Email address'), {
       target: { value: 'anita@example.com' },
     });
     fireEvent.change(screen.getByLabelText('Password'), {
-      target: { value: 'secret123' },
+      target: { value: 'Secure123!' },
     });
 
     await act(async () => {
@@ -240,10 +270,11 @@ describe('LoginScreen', () => {
     expect(mockCreateUserWithEmailAndPassword).toHaveBeenCalledWith(
       mockAuthObj,
       'anita@example.com',
-      'secret123'
+      'Secure123!'
     );
-    expect(mockUpsertUserDocument).toHaveBeenCalledWith(
+    expect(mockSaveUserProfileWithUsername).toHaveBeenCalledWith(
       'new-caregiver-1',
+      'Anita Rao',
       expect.objectContaining({
         uid: 'new-caregiver-1',
         email: 'anita@example.com',
@@ -253,10 +284,90 @@ describe('LoginScreen', () => {
         fcmTokens: [],
       })
     );
+    expect(mockSendEmailVerification).toHaveBeenCalledWith({ uid: 'new-caregiver-1' });
     expect(refreshUserProfile).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId('route-caregiver')).toBeInTheDocument();
+    expect(screen.getByTestId('route-verify-email')).toBeInTheDocument();
 
     dateTimeSpy.mockRestore();
+  });
+
+  it('lets a new account select Dual User and saves that role to its profile', async () => {
+    mockCreateUserWithEmailAndPassword.mockResolvedValueOnce({
+      user: { uid: 'new-dual-1' },
+    });
+
+    renderLoginScreen({ initialEntry: '/login?mode=signup' });
+    await act(async () => {});
+
+    fireEvent.click(screen.getByRole('radio', { name: /Dual User/i }));
+    fireEvent.change(screen.getByLabelText(/Username/), {
+      target: { value: 'Anita Rao' },
+    });
+    fireEvent.change(screen.getByLabelText('Email address'), {
+      target: { value: 'anita@example.com' },
+    });
+    fireEvent.change(screen.getByLabelText('Password'), {
+      target: { value: 'Secure123!' },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create Dual User Account' }));
+    });
+
+    expect(mockSaveUserProfileWithUsername).toHaveBeenCalledWith(
+      'new-dual-1',
+      'Anita Rao',
+      expect.objectContaining({ role: 'dual' })
+    );
+    expect(screen.getByTestId('route-verify-email')).toBeInTheDocument();
+  });
+
+  it('blocks invalid signup fields before creating an auth account', async () => {
+    renderLoginScreen({ initialEntry: '/login?mode=signup' });
+    await act(async () => {});
+
+    fireEvent.change(screen.getByLabelText(/Username/), { target: { value: 'x!' } });
+    fireEvent.change(screen.getByLabelText('Email address'), {
+      target: { value: 'not-an-email' },
+    });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'weak' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Older Adult Account' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/Username must be/i);
+    expect(mockCreateUserWithEmailAndPassword).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText(/Username/), { target: { value: 'Valid User' } });
+    fireEvent.change(screen.getByLabelText('Email address'), {
+      target: { value: 'valid@example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Older Adult Account' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(/meet all password requirements/i);
+    expect(mockCreateUserWithEmailAndPassword).not.toHaveBeenCalled();
+  });
+
+  it('routes unverified password users to the verification step after sign-in', async () => {
+    const user = {
+      uid: 'unverified-user',
+      emailVerified: false,
+      providerData: [{ providerId: 'password' }],
+    } as unknown as User;
+    mockSignInWithEmailAndPassword.mockResolvedValueOnce({ user });
+    mockGetUserDocument.mockResolvedValueOnce(makeUserDoc({ uid: user.uid }));
+
+    renderLoginScreen();
+    await act(async () => {});
+    fireEvent.change(screen.getByLabelText('Email address'), {
+      target: { value: 'user@example.com' },
+    });
+    fireEvent.change(screen.getByLabelText('Password'), {
+      target: { value: 'password123' },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Sign In' }));
+    });
+
+    expect(screen.getByTestId('route-verify-email')).toBeInTheDocument();
   });
 
   it('signs in existing email/password user, refreshes profile, and maps email auth error codes cleanly', async () => {
@@ -368,6 +479,7 @@ describe('LoginScreen', () => {
     });
     expect(mockSendPasswordResetEmail).toHaveBeenLastCalledWith(mockAuthObj, 'ramesh@example.com');
     expect(screen.getByRole('status')).toHaveTextContent(/Password reset email sent to ramesh@example\.com/i);
+    expect(within(resetPanel).getByRole('button', { name: /Try again in 60s/i })).toBeDisabled();
 
     // Back to Sign In clears reset panel and banners
     fireEvent.click(within(resetPanel).getByRole('button', { name: /Back to Sign In/i }));
@@ -413,14 +525,8 @@ describe('LoginScreen', () => {
     expect(screen.getByTestId('route-caregiver')).toBeInTheDocument();
   });
 
-  it('first-time Google Sign-In requires explicit role confirmation before upsertUserDocument and supports cancelling', async () => {
+  it('first-time Google Sign-In requires role confirmation before collecting a unique username', async () => {
     const refreshUserProfile = vi.fn().mockResolvedValue(undefined);
-    const dateTimeSpy = vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(
-      () =>
-        ({
-          resolvedOptions: () => ({ timeZone: 'Europe/London' }),
-        }) as unknown as Intl.DateTimeFormat
-    );
 
     renderLoginScreen({ refreshUserProfile });
     await act(async () => {});
@@ -438,7 +544,7 @@ describe('LoginScreen', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
     });
 
-    // Profile must NOT be written yet (prevents irreversible elderly lock-in)
+    // Profile must NOT be written before the username is available.
     expect(mockUpsertUserDocument).not.toHaveBeenCalled();
     const confirmBox = screen.getByTestId('google-role-confirmation');
     expect(confirmBox).toHaveTextContent('Meera Nair');
@@ -451,7 +557,7 @@ describe('LoginScreen', () => {
     expect(mockUpsertUserDocument).not.toHaveBeenCalled();
     expect(screen.queryByTestId('google-role-confirmation')).not.toBeInTheDocument();
 
-    // Sign in again -> pick Family Caregiver -> Continue
+    // Sign in again -> pick Family Caregiver -> continue into profile setup.
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
     });
@@ -464,21 +570,40 @@ describe('LoginScreen', () => {
       );
     });
 
-    expect(mockUpsertUserDocument).toHaveBeenCalledWith(
-      'google-first-1',
-      expect.objectContaining({
-        uid: 'google-first-1',
-        email: 'first@example.com',
-        displayName: 'Meera Nair',
-        role: 'caregiver',
-        timezone: 'Europe/London',
-        fcmTokens: [],
-      })
+    expect(mockUpsertUserDocument).not.toHaveBeenCalled();
+    expect(refreshUserProfile).not.toHaveBeenCalled();
+    expect(screen.getByTestId('route-complete-profile')).toHaveAttribute(
+      'data-onboarding-role',
+      'caregiver'
     );
-    expect(refreshUserProfile).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId('route-caregiver')).toBeInTheDocument();
+  });
 
-    dateTimeSpy.mockRestore();
+  it('passes Dual User selection from first-time Google confirmation to profile setup', async () => {
+    const newGoogleUser = {
+      uid: 'google-dual-first-1',
+      email: 'dual@example.com',
+      displayName: 'Anita Rao',
+    } as unknown as User;
+    mockSignInWithPopup.mockResolvedValue({ user: newGoogleUser });
+    mockGetUserDocument.mockResolvedValue(null);
+
+    renderLoginScreen();
+    await act(async () => {});
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
+    });
+
+    const confirmBox = screen.getByTestId('google-role-confirmation');
+    fireEvent.click(within(confirmBox).getByRole('radio', { name: /Dual User/i }));
+    await act(async () => {
+      fireEvent.click(within(confirmBox).getByRole('button', { name: 'Continue as Dual User' }));
+    });
+
+    expect(screen.getByTestId('route-complete-profile')).toHaveAttribute(
+      'data-onboarding-role',
+      'dual'
+    );
   });
 
   it('handles Google popup error codes, silent cancellations, popup-blocked redirect fallback, and mount getRedirectResult', async () => {
@@ -630,6 +755,9 @@ describe('LoginScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
     fireEvent.click(screen.getByRole('button', { name: /Try Older Adult Demo/i }));
 
+    await waitFor(() => {
+      expect(mockSignInWithEmailAndPassword).toHaveBeenCalledTimes(1);
+    });
     expect(mockSignInWithEmailAndPassword).toHaveBeenCalledTimes(1);
     expect(mockSignInWithPopup).not.toHaveBeenCalled();
     expect(loginAsDemo).not.toHaveBeenCalled();
@@ -653,6 +781,9 @@ describe('LoginScreen', () => {
     const googleBtn = screen.getByRole('button', { name: 'Continue with Google' });
     fireEvent.click(googleBtn);
     fireEvent.click(googleBtn);
+    await waitFor(() => {
+      expect(mockSignInWithPopup).toHaveBeenCalledTimes(1);
+    });
     expect(mockSignInWithPopup).toHaveBeenCalledTimes(1);
 
     await act(async () => {
@@ -661,31 +792,19 @@ describe('LoginScreen', () => {
       });
     });
 
-    // 3. Synchronous double click on Continue as Older Adult + concurrent Use another account
+    // 3. Confirm role once; profile creation waits for the username gate.
     const confirmBox = screen.getByTestId('google-role-confirmation');
-    let resolveUpsert: (() => void) | null = null;
-    mockUpsertUserDocument.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveUpsert = resolve;
-      })
-    );
-
     const continueBtn = within(confirmBox).getByRole('button', {
       name: 'Continue as Older Adult',
     });
-    const cancelBtn = within(confirmBox).getByRole('button', { name: 'Use another account' });
     fireEvent.click(continueBtn);
-    fireEvent.click(continueBtn);
-    fireEvent.click(cancelBtn);
-
-    expect(mockUpsertUserDocument).toHaveBeenCalledTimes(1);
+    expect(mockUpsertUserDocument).not.toHaveBeenCalled();
     expect(mockFirebaseSignOut).not.toHaveBeenCalled();
-
-    await act(async () => {
-      resolveUpsert?.();
-    });
     await waitFor(() => {
-      expect(screen.getByTestId('route-today')).toBeInTheDocument();
+      expect(screen.getByTestId('route-complete-profile')).toHaveAttribute(
+        'data-onboarding-role',
+        'elderly'
+      );
     });
 
     // 4. Synchronous double submit on Forgot Password form

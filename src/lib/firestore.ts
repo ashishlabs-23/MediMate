@@ -17,6 +17,7 @@ import {
   getDocs,
   onSnapshot,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -38,6 +39,7 @@ import type {
   MedicationDocument,
   UserDocument,
 } from '../types/firestore';
+import { isValidUsername, normalizeUsername, sanitizePlainText } from './authValidation';
 
 // ============================================================================
 // Generic converter factories
@@ -106,6 +108,67 @@ export async function upsertUserDocument(
       updatedAt: serverTimestamp(),
     } as WithFieldValue<UserDocument>);
   }
+}
+
+export async function saveUserProfileWithUsername(
+  uid: string,
+  rawUsername: string,
+  initialProfile?: Omit<UserDocument, 'createdAt' | 'updatedAt' | 'username'>
+): Promise<void> {
+  const username = sanitizePlainText(rawUsername);
+  if (!isValidUsername(username)) {
+    throw new Error('Username must be 2–30 characters using letters, numbers, spaces, or underscores.');
+  }
+
+  const usernameKey = normalizeUsername(username);
+  const userRef = doc(usersCol(), uid);
+  const usernameRef = doc(collection(db, 'usernames'), usernameKey);
+
+  await runTransaction(db, async (transaction) => {
+    const [usernameSnapshot, userSnapshot] = await Promise.all([
+      transaction.get(usernameRef),
+      transaction.get(userRef),
+    ]);
+
+    if (usernameSnapshot.exists() && usernameSnapshot.data().uid !== uid) {
+      throw new Error('USERNAME_TAKEN');
+    }
+
+    const existingProfile = userSnapshot.exists() ? userSnapshot.data() : null;
+    if (
+      existingProfile?.username &&
+      normalizeUsername(existingProfile.username) !== usernameKey
+    ) {
+      throw new Error('USERNAME_ALREADY_SET');
+    }
+
+    if (!usernameSnapshot.exists()) {
+      transaction.set(usernameRef, {
+        uid,
+        username,
+        createdAt: serverTimestamp(),
+      });
+    }
+
+    if (existingProfile) {
+      transaction.update(userRef, {
+        username,
+        displayName: username,
+        updatedAt: serverTimestamp(),
+      });
+    } else if (initialProfile) {
+      transaction.set(userRef, {
+        ...initialProfile,
+        uid,
+        username,
+        displayName: username,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      throw new Error('USER_PROFILE_REQUIRED');
+    }
+  });
 }
 
 export async function updateUserAccessibilityPreferences(

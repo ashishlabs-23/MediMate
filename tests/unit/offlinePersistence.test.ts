@@ -36,6 +36,8 @@ describe('Offline Persistence, Auto-Seed Guard & Date-Range Queries', () => {
     }));
     vi.doMock('firebase/auth', () => ({
       getAuth: vi.fn().mockReturnValue({}),
+      setPersistence: vi.fn().mockResolvedValue(undefined),
+      indexedDBLocalPersistence: {},
     }));
     vi.doMock('firebase/messaging', () => ({
       getMessaging: vi.fn(),
@@ -78,6 +80,8 @@ describe('Offline Persistence, Auto-Seed Guard & Date-Range Queries', () => {
     }));
     vi.doMock('firebase/auth', () => ({
       getAuth: vi.fn().mockReturnValue({}),
+      setPersistence: vi.fn().mockResolvedValue(undefined),
+      indexedDBLocalPersistence: {},
     }));
     vi.doMock('firebase/messaging', () => ({
       getMessaging: vi.fn(),

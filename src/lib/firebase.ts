@@ -7,7 +7,12 @@
  */
 
 import { initializeApp, type FirebaseApp } from 'firebase/app';
-import { getAuth, type Auth } from 'firebase/auth';
+import {
+  getAuth,
+  indexedDBLocalPersistence,
+  setPersistence,
+  type Auth,
+} from 'firebase/auth';
 import {
   arrayUnion,
   doc,
@@ -50,6 +55,10 @@ export const firebaseApp: FirebaseApp = initializeApp(firebaseConfig);
 
 /** Firebase Auth instance. */
 export const auth: Auth = getAuth(firebaseApp);
+export const authPersistenceReady: Promise<void> =
+  typeof setPersistence === 'function' && auth
+    ? setPersistence(auth, indexedDBLocalPersistence).catch(() => {})
+    : Promise.resolve();
 
 /**
  * Creates a Firestore instance configured with IndexedDB multi-tab offline

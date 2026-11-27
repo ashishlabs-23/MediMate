@@ -4,6 +4,7 @@ import { AuthProvider, useAuthContext } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { useAuth } from './hooks/useAuth';
 import { LoginScreen } from './components/auth/LoginScreen';
+import { CompleteProfileGate, EmailVerificationGate, requiresEmailVerification } from './components/auth/AuthGates';
 import { LandingPage } from './pages/LandingPage';
 import { TodayView } from './pages/TodayView';
 import { CaregiverDashboard } from './pages/CaregiverDashboard';
@@ -25,8 +26,14 @@ function LoadingScreen() {
   );
 }
 
-function RequireAuth({ children }: { children: ReactNode }) {
-  const { firebaseUser, isLoading } = useAuthContext();
+export function RequireAuth({
+  children,
+  requiredRole,
+}: {
+  children: ReactNode;
+  requiredRole?: 'elderly' | 'caregiver';
+}) {
+  const { firebaseUser, isLoading, userProfile, isDemo } = useAuthContext();
 
   if (isLoading) {
     return <LoadingScreen />;
@@ -34,6 +41,26 @@ function RequireAuth({ children }: { children: ReactNode }) {
 
   if (!firebaseUser) {
     return <Navigate to="/login" replace />;
+  }
+  if (!isDemo && requiresEmailVerification(firebaseUser)) {
+    return <Navigate to="/verify-email" replace />;
+  }
+  if (!isDemo && userProfile?.username === '') {
+    return <Navigate to="/complete-profile" replace />;
+  }
+  if (
+    requiredRole &&
+    !isDemo &&
+    userProfile?.role &&
+    userProfile.role !== 'dual' &&
+    userProfile.role !== requiredRole
+  ) {
+    return (
+      <Navigate
+        to={userProfile.role === 'caregiver' ? '/app/caregiver' : '/app/today'}
+        replace
+      />
+    );
   }
 
   return <>{children}</>;
@@ -56,16 +83,29 @@ function LandingRoute() {
   return <LandingPage />;
 }
 
+function LoginRoute() {
+  const { firebaseUser, userProfile, isLoading } = useAuthContext();
+
+  if (isLoading) return <LoadingScreen />;
+  if (firebaseUser) {
+    return <Navigate to={userProfile?.role === 'caregiver' ? '/app/caregiver' : '/app/today'} replace />;
+  }
+
+  return <LoginScreen />;
+}
+
 export function AppRoutes() {
   return (
     <Routes>
       <Route path="/" element={<LandingRoute />} />
       <Route path="/welcome" element={<LandingPage />} />
-      <Route path="/login" element={<LoginScreen />} />
+      <Route path="/login" element={<LoginRoute />} />
+      <Route path="/verify-email" element={<EmailVerificationGate />} />
+      <Route path="/complete-profile" element={<CompleteProfileGate />} />
       <Route
         path="/app/today"
         element={
-          <RequireAuth>
+          <RequireAuth requiredRole="elderly">
             <TodayView />
           </RequireAuth>
         }
@@ -73,7 +113,7 @@ export function AppRoutes() {
       <Route
         path="/app/caregiver"
         element={
-          <RequireAuth>
+          <RequireAuth requiredRole="caregiver">
             <CaregiverDashboard />
           </RequireAuth>
         }

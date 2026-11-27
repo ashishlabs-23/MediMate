@@ -38,6 +38,7 @@ const {
 
 vi.mock('../../src/lib/firebase', () => ({
   auth: { name: 'mock-auth' },
+  authPersistenceReady: Promise.resolve(),
   registerFcmToken: (...args: unknown[]) => mockRegisterFcmToken(...args),
 }));
 

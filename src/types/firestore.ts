@@ -34,6 +34,7 @@ export interface UserDocument {
   uid: string;
   email: string;
   displayName: string;
+  username?: string;
   role: UserRole;
   phoneNumber?: string;
   timezone: string;

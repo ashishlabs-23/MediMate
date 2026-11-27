@@ -151,6 +151,7 @@ MediMate bridges elderly autonomy and caregiver peace of mind through a cloud-sy
 - **R2.1: Multi-Role Authentication (Firebase Auth):**
   - Support user registration and login with email/password or authentication tokens.
   - Three distinct role profiles: `elderly`, `caregiver`, and `dual`.
+  - Require role selection during onboarding and keep the persisted role immutable after profile creation. Only `dual` accounts may switch between Simple Mode and Caregiver View; demo sessions remain sandboxed.
   - User profile stored in `users/{userId}` with role, timezone, display name, FCM tokens, and accessibility preferences.
 - **R2.2: Cloud Firestore Collections & Schemas:**
   - `users/{userId}`: User identity, contact info, role, and accessibility settings.

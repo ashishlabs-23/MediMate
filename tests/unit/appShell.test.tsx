@@ -1,9 +1,10 @@
 import '@testing-library/jest-dom/vitest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { Timestamp } from 'firebase/firestore';
 import type { User } from 'firebase/auth';
+import { RequireAuth } from '../../src/App';
 import { AppShell } from '../../src/components/layout/AppShell';
 import { AuthProvider, type AuthContextValue } from '../../src/contexts/AuthContext';
 import type { UserDocument, UserRole } from '../../src/types/firestore';
@@ -50,6 +51,82 @@ describe('AppShell Trial Mode Banner & Layout', () => {
     document.documentElement.removeAttribute('data-high-contrast');
     document.documentElement.removeAttribute('data-large-text');
     vi.clearAllMocks();
+  });
+
+  it('keeps authenticated caregivers out of Simple Mode, including direct route access', () => {
+    const authValue = makeAuthValue({ uid: 'real-caregiver', role: 'caregiver', isDemo: false });
+    if (authValue.userProfile) authValue.userProfile.username = 'priya';
+
+    render(
+      <AuthProvider value={authValue}>
+        <MemoryRouter initialEntries={['/app/today']}>
+          <Routes>
+            <Route
+              path="/app/today"
+              element={
+                <RequireAuth requiredRole="elderly">
+                  <div>Older Adult View</div>
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/app/caregiver"
+              element={
+                <RequireAuth requiredRole="caregiver">
+                  <div>Caregiver View</div>
+                </RequireAuth>
+              }
+            />
+          </Routes>
+        </MemoryRouter>
+      </AuthProvider>
+    );
+
+    expect(screen.getByText('Caregiver View')).toBeInTheDocument();
+    expect(screen.queryByText('Older Adult View')).not.toBeInTheDocument();
+  });
+
+  it('allows dual-role users into both views and keeps the demo role switch available', () => {
+    for (const [role, isDemo, path, expectedView] of [
+      ['dual', false, '/app/caregiver', 'Caregiver View'],
+      ['dual', false, '/app/today', 'Older Adult View'],
+      ['caregiver', true, '/app/today', 'Older Adult View'],
+    ] as const) {
+      const authValue = makeAuthValue({
+        uid: isDemo ? 'caregiver_priya' : 'real-dual-user',
+        role,
+        isDemo,
+      });
+      if (authValue.userProfile) authValue.userProfile.username = 'testuser';
+
+      const { unmount } = render(
+        <AuthProvider value={authValue}>
+          <MemoryRouter initialEntries={[path]}>
+            <Routes>
+              <Route
+                path="/app/today"
+                element={
+                  <RequireAuth requiredRole="elderly">
+                    <div>Older Adult View</div>
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/app/caregiver"
+                element={
+                  <RequireAuth requiredRole="caregiver">
+                    <div>Caregiver View</div>
+                  </RequireAuth>
+                }
+              />
+            </Routes>
+          </MemoryRouter>
+        </AuthProvider>
+      );
+
+      expect(screen.getByText(expectedView)).toBeInTheDocument();
+      unmount();
+    }
   });
 
   it('renders Trial Mode banner inside <header> below <nav> when isDemo is true', () => {

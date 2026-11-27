@@ -35,6 +35,13 @@ service cloud.firestore {
       return isSelf(patientId) || isCaregiverFor(patientId);
     }
 
+    function hasValidUsernameClaim() {
+      return request.resource.data.username is string
+        && request.resource.data.username.matches('^[A-Za-z0-9_][A-Za-z0-9_ ]{0,28}[A-Za-z0-9_]$')
+        && existsAfter(/databases/$(database)/documents/usernames/$(request.resource.data.username.lower()))
+        && getAfter(/databases/$(database)/documents/usernames/$(request.resource.data.username.lower())).data.uid == uid();
+    }
+
     // Validates controlled self-join onto care_circles/{patientId} using an active care_invites/{code} doc.
     function isValidCaregiverSelfJoin(patientId) {
       return isAuthed()
@@ -67,15 +74,33 @@ service cloud.firestore {
 
       allow create: if isAuthed()
         && uid() == userId
-        && request.resource.data.uid == userId;
+        && request.resource.data.uid == userId
+        && hasValidUsernameClaim();
 
       allow update: if isAuthed()
         && resource != null
         && uid() == userId
         && request.resource.data.uid == userId
-        && !(('role' in resource.data) && resource.data.role == 'elderly' && request.resource.data.role != 'elderly');
+        && hasValidUsernameClaim()
+        && (('role' in resource.data) == ('role' in request.resource.data))
+        && (!('role' in resource.data) || request.resource.data.role == resource.data.role);
 
       allow delete: if false;
+    }
+
+    // Username claims are private to authenticated lookups and can only be created once.
+    match /usernames/{usernameKey} {
+      allow get: if isAuthed();
+      allow list: if false;
+
+      allow create: if isAuthed()
+        && request.resource.data.keys().hasOnly(['uid', 'username', 'createdAt'])
+        && request.resource.data.uid == uid()
+        && request.resource.data.username is string
+        && request.resource.data.username.matches('^[A-Za-z0-9_][A-Za-z0-9_ ]{0,28}[A-Za-z0-9_]$')
+        && usernameKey == request.resource.data.username.lower();
+
+      allow update, delete: if false;
     }
 
     // =========================================================================

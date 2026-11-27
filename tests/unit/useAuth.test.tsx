@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, renderHook } from '@testing-library/react';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { Timestamp } from 'firebase/firestore';
 import type { User } from 'firebase/auth';
 import { useAuth } from '../../src/hooks/useAuth';
@@ -29,8 +29,13 @@ const {
   >(),
 }));
 
+async function waitForAuthSubscription(): Promise<void> {
+  await waitFor(() => expect(mockOnAuthStateChanged).toHaveBeenCalled());
+}
+
 vi.mock('../../src/lib/firebase', () => ({
   auth: mockAuthState,
+  authPersistenceReady: Promise.resolve(),
 }));
 
 vi.mock('firebase/auth', () => ({
@@ -128,6 +133,7 @@ describe('useAuth', () => {
     );
 
     const { result } = renderHook(() => useAuth());
+    await waitForAuthSubscription();
 
     await act(async () => {
       await authCb?.({ uid: 'uid-hydrate-1', email: 'c@medimate.local' } as unknown as User);
@@ -157,6 +163,7 @@ describe('useAuth', () => {
   it('refreshUserProfile hydrates from auth.currentUser fallback and skips demo sessions', async () => {
     mockOnAuthStateChanged.mockImplementation(() => vi.fn());
     const { result } = renderHook(() => useAuth());
+    await waitForAuthSubscription();
 
     // Without user -> no-op
     await act(async () => {
@@ -214,6 +221,7 @@ describe('useAuth', () => {
       .mockResolvedValueOnce(freshProfile);
 
     const { result } = renderHook(() => useAuth());
+    await waitForAuthSubscription();
     const userObj = { uid: 'uid-race-1', email: 'race@medimate.local' } as unknown as User;
 
     // 1. onAuthStateChanged fires immediately on signup while Firestore write is still in flight
@@ -262,6 +270,7 @@ describe('useAuth', () => {
       .mockResolvedValueOnce(latestProfile);
 
     const { result } = renderHook(() => useAuth());
+    await waitForAuthSubscription();
     await act(async () => {
       await authCb?.({ uid: 'uid-order-1' } as unknown as User);
     });
@@ -296,6 +305,7 @@ describe('useAuth', () => {
   it('exits demo mode and hydrates new real auth.currentUser on refreshUserProfile before onAuthStateChanged fires', async () => {
     mockOnAuthStateChanged.mockImplementation(() => vi.fn());
     const { result } = renderHook(() => useAuth());
+    await waitForAuthSubscription();
 
     act(() => {
       result.current.loginAsDemo?.('elderly');
@@ -339,6 +349,7 @@ describe('useAuth', () => {
     );
 
     const { result } = renderHook(() => useAuth());
+    await waitForAuthSubscription();
 
     await act(async () => {
       await authCb?.({ uid: 'user-A', email: 'a@medimate.local' } as unknown as User);

@@ -350,4 +350,50 @@ describe('TodayView — R2-FE Trial / Demo Isolation', () => {
     expect(document.getElementById('snooze-button')).not.toBeDisabled();
     expect(mockUpdateDoseLog).not.toHaveBeenCalled();
   });
+
+  it('STRESS 1: demo snooze at 08:21 (snoozeUntil 08:31 > escalationMs 08:30) escalates Metformin to unconfirmed at 08:30 instead of stranding in snoozed, with ZERO Firestore calls', async () => {
+    vi.setSystemTime(new Date(2026, 10, 25, 8, 21, 0, 0));
+
+    render(
+      <AuthProvider
+        value={makeAuthValue({ uid: 'patient_ramesh', isDemo: true, nullFirebaseUser: true })}
+      >
+        <TodayView />
+      </AuthProvider>
+    );
+
+    expect(document.getElementById('dose-medication-name')).toHaveTextContent('Metformin');
+    expect(document.getElementById('snooze-button')).not.toBeDisabled();
+
+    // Tap Snooze at 08:21 -> snoozed until 08:31 (past 08:30 T+30m escalation ceiling)
+    await act(async () => {
+      fireEvent.click(document.getElementById('snooze-button') as HTMLButtonElement);
+    });
+    expect(screen.getByText('Snoozed')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Dose status: Due now')).not.toBeInTheDocument();
+    expect(document.getElementById('snooze-button')).toBeDisabled();
+
+    // Advance +9m to 08:30 -> T+30m overrides active snooze, transitioning Metformin to 'unconfirmed'
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9 * 60_000);
+    });
+    expect(document.getElementById('dose-medication-name')).toHaveTextContent('Metformin');
+    expect(screen.getByLabelText('Dose status: Due now')).toBeInTheDocument();
+    expect(screen.queryByText('Snoozed')).not.toBeInTheDocument();
+    expect(document.getElementById('snooze-button')).toBeDisabled();
+
+    // Advance +11m to 08:41 (past snoozeUntil 08:31) -> remains unconfirmed (never stranded in 'snoozed' or reverted to 'due')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(11 * 60_000);
+    });
+    expect(document.getElementById('dose-medication-name')).toHaveTextContent('Metformin');
+    expect(screen.getByLabelText('Dose status: Due now')).toBeInTheDocument();
+    expect(screen.queryByText('Snoozed')).not.toBeInTheDocument();
+    expect(document.getElementById('snooze-button')).toBeDisabled();
+
+    expect(mockGenerateTodayLogs).not.toHaveBeenCalled();
+    expect(mockSubscribeToDoseLogs).not.toHaveBeenCalled();
+    expect(mockGetDoseLog).not.toHaveBeenCalled();
+    expect(mockUpdateDoseLog).not.toHaveBeenCalled();
+  });
 });
