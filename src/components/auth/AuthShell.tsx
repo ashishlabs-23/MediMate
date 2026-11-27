@@ -87,11 +87,11 @@ export function AuthShell({ children, label, onClose }: AuthShellProps) {
             ? { duration: 0 }
             : { type: 'spring', stiffness: 300, damping: 28 }
         }
-        className="relative max-h-[90vh] w-full max-w-md overflow-y-auto overflow-x-hidden rounded-t-card border border-ink-muted/20 bg-surface p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-xl sm:p-8 md:rounded-card md:pb-8"
+        className="relative max-h-[92vh] w-full max-w-md overflow-y-auto overflow-x-hidden rounded-t-card border border-ink-muted/20 bg-surface p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-xl sm:p-6 md:rounded-card md:pb-6 scrollbar-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
       >
         <div
           aria-hidden="true"
-          className="mx-auto mb-4 mt-1 h-1 w-10 rounded-full bg-ink-muted/30 md:hidden"
+          className="mx-auto mb-2.5 mt-1 h-1 w-10 rounded-full bg-ink-muted/30 md:hidden"
         />
         {onClose && (
           <motion.button

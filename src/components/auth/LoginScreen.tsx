@@ -26,7 +26,6 @@ import { auth } from '../../lib/firebase';
 import {
   getUserDocument,
   saveUserProfileWithUsername,
-  upsertUserDocument,
 } from '../../lib/firestore';
 import { useAuthContext } from '../../contexts/AuthContext';
 import type { UserDocument, UserRole } from '../../types/firestore';
@@ -471,7 +470,6 @@ export function LoginScreen() {
 
   async function handleConfirmGoogleRole() {
     if (!pendingGoogleUser || submittingRef.current) return;
-    const targetUser = pendingGoogleUser;
     const chosenRole = selectedRole;
     submittingRef.current = true;
     setErrorMsg(null);
@@ -479,29 +477,14 @@ export function LoginScreen() {
     setIsSubmitting(true);
 
     try {
-      await upsertUserDocument(targetUser.uid, {
-        uid: targetUser.uid,
-        email: targetUser.email ?? '',
-        displayName:
-          targetUser.displayName ||
-          (chosenRole === 'caregiver' ? 'Caregiver' : chosenRole === 'dual' ? 'Dual User' : 'Older Adult'),
-        role: chosenRole,
-        timezone: resolveBrowserTimezone(),
-        fcmTokens: [],
-        accessibilityPreferences: {
-          highContrast: false,
-          largeText: true,
-          hapticFeedback: true,
-          soundEnabled: true,
+      setPendingGoogleUser(null);
+      navigate('/complete-profile', {
+        replace: true,
+        state: {
+          onboardingRole: chosenRole,
+          ...(safeRedirectTo ? { redirectTo: safeRedirectTo } : {}),
         },
       });
-
-      if (refreshUserProfile) {
-        await refreshUserProfile();
-      }
-
-      setPendingGoogleUser(null);
-      navigateForRole(chosenRole);
     } catch (err: unknown) {
       const msg =
         err instanceof Error && err.message
@@ -594,12 +577,12 @@ export function LoginScreen() {
 
   function renderRoleSelector() {
     return (
-      <div className="mb-5">
-        <label className="mb-2 block text-center text-xs font-bold uppercase tracking-wider text-ink-secondary">
+      <div className="mb-2.5">
+        <label className="mb-1 block text-center text-[11px] font-bold uppercase tracking-wider text-ink-secondary">
           I Am An:
         </label>
         <div
-          className="grid grid-cols-1 gap-1.5 rounded-btn bg-canvas p-1.5 sm:grid-cols-3"
+          className="grid grid-cols-3 gap-1 rounded-btn bg-canvas p-1"
           role="radiogroup"
           aria-label="Select User Role"
         >
@@ -609,7 +592,7 @@ export function LoginScreen() {
             aria-checked={selectedRole === 'elderly'}
             disabled={isSubmitting}
             onClick={() => setSelectedRole('elderly')}
-            className={`flex min-h-touch w-full items-center justify-center gap-1.5 rounded-btn px-3 py-2.5 text-center text-xs font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm ${
+            className={`flex min-h-touch w-full items-center justify-center gap-1 rounded-btn px-2 py-2 text-center text-xs font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
               selectedRole === 'elderly'
                 ? 'border border-ink-muted/30 bg-surface text-brand-teal shadow-sm'
                 : 'text-ink-secondary hover:text-ink-primary'
@@ -623,7 +606,7 @@ export function LoginScreen() {
             aria-checked={selectedRole === 'caregiver'}
             disabled={isSubmitting}
             onClick={() => setSelectedRole('caregiver')}
-            className={`flex min-h-touch w-full items-center justify-center gap-1.5 rounded-btn px-3 py-2.5 text-center text-xs font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm ${
+            className={`flex min-h-touch w-full items-center justify-center gap-1 rounded-btn px-2 py-2 text-center text-xs font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
               selectedRole === 'caregiver'
                 ? 'border border-ink-muted/30 bg-surface text-brand-teal shadow-sm'
                 : 'text-ink-secondary hover:text-ink-primary'
@@ -637,7 +620,7 @@ export function LoginScreen() {
             aria-checked={selectedRole === 'dual'}
             disabled={isSubmitting}
             onClick={() => setSelectedRole('dual')}
-            className={`flex min-h-touch w-full items-center justify-center gap-1.5 rounded-btn px-3 py-2.5 text-center text-xs font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm ${
+            className={`flex min-h-touch w-full items-center justify-center gap-1 rounded-btn px-2 py-2 text-center text-xs font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
               selectedRole === 'dual'
                 ? 'border border-ink-muted/30 bg-surface text-brand-teal shadow-sm'
                 : 'text-ink-secondary hover:text-ink-primary'
@@ -657,29 +640,30 @@ export function LoginScreen() {
         aria-labelledby="login-heading"
         className="w-full"
       >
-        {/* ── Brand header ── */}
-        <div className="mb-7 text-center">
-          {/* Logo pill */}
-          <div className="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-card bg-brand-teal shadow-md">
-            <svg className="w-9 h-9 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-            </svg>
+        {/* ── Compact Brand header ── */}
+        <div className="mb-3.5 flex flex-col items-center text-center">
+          <div className="flex items-center gap-2">
+            <div className="inline-flex h-8 w-8 items-center justify-center rounded-btn bg-brand-teal shadow-sm">
+              <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+              </svg>
+            </div>
+            <h1
+              id="login-heading"
+              className="text-2xl font-extrabold text-brand-teal-dark tracking-tight"
+            >
+              MediMate
+            </h1>
+            <span className="inline-flex items-center gap-1 rounded-full border border-brand-teal/20 bg-brand-teal-light px-2 py-0.5 text-[10px] font-semibold text-brand-teal-dark">
+              <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+              </svg>
+              UN SDG 3
+            </span>
           </div>
-          <h1
-            id="login-heading"
-            className="text-3xl font-extrabold text-brand-teal-dark tracking-tight"
-          >
-            MediMate
-          </h1>
-          <p className="mt-1.5 text-sm font-medium text-ink-secondary">
+          <p className="mt-0.5 text-xs text-ink-secondary">
             Smart Medication Reminder for Older Adults &amp; Caregivers
           </p>
-          <span className="mt-2.5 inline-flex items-center gap-1 rounded-full border border-brand-teal/20 bg-brand-teal-light px-2.5 py-1 text-[10px] font-semibold text-brand-teal-dark">
-            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-            </svg>
-            UN SDG 3 — Good Health &amp; Well-Being
-          </span>
         </div>
 
         {/* ── Banners ── */}
@@ -835,42 +819,11 @@ export function LoginScreen() {
         ) : (
           /* ── Main Auth Flow (Google + Email) ── */
           <>
-            {/* Google button */}
-            <motion.button
-              type="button"
-              onClick={() => void handleGoogleSignIn()}
-              disabled={isSubmitting}
-              {...(!reducedMotion
-                ? { whileHover: { y: -2 }, whileTap: { scale: 0.97 } }
-                : {})}
-              transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-              className="mb-5 flex min-h-touch w-full items-center justify-center gap-3 rounded-btn border border-ink-muted/30 bg-surface px-4 py-3 text-sm font-semibold text-ink-primary transition-colors hover:bg-canvas disabled:cursor-not-allowed disabled:opacity-60"
-              aria-label="Continue with Google"
-            >
-              <svg className="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24" aria-hidden="true">
-                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
-                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
-              </svg>
-              <span>Continue with Google</span>
-            </motion.button>
-
-            {/* Divider */}
-            <div className="relative mb-5">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-ink-muted/30" />
-              </div>
-              <div className="relative flex justify-center text-xs">
-                <span className="bg-surface px-3 font-medium text-ink-muted">or continue with email</span>
-              </div>
-            </div>
-
             {/* Pill tabs */}
             <div
               role="tablist"
               aria-label="Authentication mode"
-              className="mb-5 flex gap-1 rounded-btn bg-canvas p-1"
+              className="mb-2.5 flex gap-1 rounded-btn bg-canvas p-1"
             >
               <button
                 type="button"
@@ -902,8 +855,39 @@ export function LoginScreen() {
               </button>
             </div>
 
+            {/* Google button */}
+            <motion.button
+              type="button"
+              onClick={() => void handleGoogleSignIn()}
+              disabled={isSubmitting}
+              {...(!reducedMotion
+                ? { whileHover: { y: -2 }, whileTap: { scale: 0.97 } }
+                : {})}
+              transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+              className="mb-2.5 flex min-h-touch w-full items-center justify-center gap-2.5 rounded-btn border border-ink-muted/30 bg-surface px-4 py-2.5 text-sm font-semibold text-ink-primary transition-colors hover:bg-canvas disabled:cursor-not-allowed disabled:opacity-60"
+              aria-label="Continue with Google"
+            >
+              <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+              </svg>
+              <span>Continue with Google</span>
+            </motion.button>
+
+            {/* Divider */}
+            <div className="relative mb-2.5">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-ink-muted/20" />
+              </div>
+              <div className="relative flex justify-center text-[11px]">
+                <span className="bg-surface px-2.5 font-medium text-ink-muted">or continue with email</span>
+              </div>
+            </div>
+
             {/* Email/Password Form */}
-            <form onSubmit={(e) => void handleSubmit(e)} noValidate className="mb-6 space-y-4">
+            <form onSubmit={(e) => void handleSubmit(e)} noValidate className="mb-3 space-y-2.5">
               {/* Role selector — signup only */}
               {mode === 'signup' && renderRoleSelector()}
 
@@ -912,11 +896,11 @@ export function LoginScreen() {
                 <div>
                   <label
                     htmlFor="username"
-                    className="mb-1.5 block text-sm font-semibold text-ink-primary"
+                    className="mb-1 block text-xs font-semibold text-ink-primary"
                   >
                     Username / Display Name
-                    <span className="ml-1.5 text-[11px] font-normal text-ink-muted">
-                      (2–30 characters; letters, numbers, spaces, or underscores)
+                    <span className="ml-1 text-[10px] font-normal text-ink-muted">
+                      (2–30 chars)
                     </span>
                   </label>
                   <div className="relative">
@@ -935,12 +919,12 @@ export function LoginScreen() {
                       placeholder="Choose a username"
                       minLength={2}
                       maxLength={30}
-                      className="min-h-touch w-full rounded-btn border border-ink-muted/30 bg-canvas py-2.5 pl-10 pr-4 text-base text-ink-primary placeholder:text-ink-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50"
+                      className="min-h-touch w-full rounded-btn border border-ink-muted/30 bg-canvas py-2 pl-9 pr-3 text-sm text-ink-primary placeholder:text-ink-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50"
                       disabled={isSubmitting}
                     />
                   </div>
                   {username.length > 0 && !isValidUsername(cleanUsername) && (
-                    <p className="mt-1 text-xs text-alert font-medium">
+                    <p className="mt-0.5 text-xs text-alert font-medium">
                       Use 2–30 characters: letters, numbers, spaces, or underscores.
                     </p>
                   )}
@@ -949,7 +933,7 @@ export function LoginScreen() {
 
               {/* Email */}
               <div>
-                <label htmlFor="email" className="mb-1.5 block text-sm font-semibold text-ink-primary">
+                <label htmlFor="email" className="mb-1 block text-xs font-semibold text-ink-primary">
                   Email address
                 </label>
                 <div className="relative">
@@ -967,7 +951,7 @@ export function LoginScreen() {
                     value={email}
                     onChange={(e) => setEmail(sanitizePlainText(e.target.value))}
                     placeholder="you@example.com"
-                    className="min-h-touch w-full rounded-btn border border-ink-muted/30 bg-canvas py-2.5 pl-10 pr-4 text-base text-ink-primary placeholder:text-ink-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50"
+                    className="min-h-touch w-full rounded-btn border border-ink-muted/30 bg-canvas py-2 pl-9 pr-3 text-sm text-ink-primary placeholder:text-ink-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50"
                     aria-label="Email address"
                     aria-invalid={mode === 'signup' && email.length > 0 && !emailIsValid}
                     disabled={isSubmitting}
@@ -976,7 +960,7 @@ export function LoginScreen() {
                 {mode === 'signup' && email.length > 0 && (
                   <p
                     aria-live="polite"
-                    className={`mt-1 text-xs ${emailIsValid ? 'text-taken' : 'text-alert'}`}
+                    className={`mt-0.5 text-xs ${emailIsValid ? 'text-taken' : 'text-alert'}`}
                   >
                     {emailIsValid ? 'Email format looks good.' : 'Enter a valid email address.'}
                   </p>
@@ -985,14 +969,14 @@ export function LoginScreen() {
 
               {/* Password */}
               <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label htmlFor="password" className="text-sm font-semibold text-ink-primary">
+                <div className="flex items-center justify-between mb-1">
+                  <label htmlFor="password" className="text-xs font-semibold text-ink-primary">
                     Password
                   </label>
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="inline-flex min-h-touch min-w-touch items-center justify-center px-2 text-xs font-semibold text-brand-teal hover:underline"
+                    className="inline-flex min-h-touch min-w-touch items-center justify-center px-1 text-xs font-semibold text-brand-teal hover:underline"
                   >
                     {showPassword ? 'Hide password' : 'Show password'}
                   </button>
@@ -1011,28 +995,29 @@ export function LoginScreen() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder={mode === 'signup' ? 'Create a strong password' : 'Enter your password'}
-                    className="min-h-touch w-full rounded-btn border border-ink-muted/30 bg-canvas py-2.5 pl-10 pr-4 text-base text-ink-primary placeholder:text-ink-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50"
+                    className="min-h-touch w-full rounded-btn border border-ink-muted/30 bg-canvas py-2 pl-9 pr-3 text-sm text-ink-primary placeholder:text-ink-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50"
                     aria-label="Password"
                     aria-describedby={mode === 'signup' ? 'password-requirements' : undefined}
                     disabled={isSubmitting}
                   />
                 </div>
                 {mode === 'signup' && (
-                  <ul id="password-requirements" aria-label="Password requirements" className="mt-2 grid grid-cols-1 gap-1 text-xs sm:grid-cols-2">
+                  <ul id="password-requirements" aria-label="Password validation rules" className="mt-1.5 grid grid-cols-2 gap-x-2 gap-y-0.5 text-[11px]">
                     {passwordRequirements.map(({ label, met }) => (
-                      <li key={label} className={met ? 'font-medium text-taken' : 'text-ink-muted'}>
-                        <span aria-hidden="true">{met ? '✓' : '○'}</span> {label}
+                      <li key={label} className={`flex items-center gap-1 ${met ? 'font-medium text-taken' : 'text-ink-muted'}`}>
+                        <span aria-hidden="true">{met ? '✓' : '○'}</span>
+                        <span className="truncate">{label}</span>
                       </li>
                     ))}
                   </ul>
                 )}
                 {mode === 'signin' && (
-                  <div className="flex justify-end mt-1">
+                  <div className="flex justify-end mt-0.5">
                     <button
                       type="button"
                       onClick={() => { setMode('reset'); setErrorMsg(null); setSuccessMsg(null); }}
                       disabled={isSubmitting}
-                      className="inline-flex min-h-touch min-w-touch items-center justify-center px-2 text-xs font-semibold text-brand-teal hover:underline disabled:opacity-50"
+                      className="inline-flex min-h-touch min-w-touch items-center justify-center px-1 text-xs font-semibold text-brand-teal hover:underline disabled:opacity-50"
                     >
                       Forgot password?
                     </button>
@@ -1046,10 +1031,10 @@ export function LoginScreen() {
                 disabled={isSubmitting}
                 aria-busy={isSubmitting}
                 {...(!reducedMotion
-                  ? { whileHover: { y: -2 }, whileTap: { scale: 0.97 } }
+                  ? { whileHover: { y: -1 }, whileTap: { scale: 0.97 } }
                   : {})}
                 transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-                className="flex min-h-touch w-full items-center justify-center gap-2 rounded-btn bg-brand-teal px-6 py-3 text-base font-semibold text-white transition-colors hover:bg-brand-teal-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex min-h-touch w-full items-center justify-center gap-2 rounded-btn bg-brand-teal px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-teal-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isSubmitting ? (
                   <>
@@ -1075,56 +1060,51 @@ export function LoginScreen() {
           </>
         )}
 
-        {/* ── Demo Section ── */}
+        {/* ── Compact Demo Section ── */}
         {!pendingGoogleUser && (
           <div
             data-testid="trial-demo-section"
             aria-labelledby="trial-demo-heading"
-            className="border-t border-ink-muted/20 pt-5"
+            className="border-t border-ink-muted/20 pt-2.5 text-center"
           >
-            <div className="rounded-card border border-ink-muted/20 bg-canvas p-4 text-center">
-              <div className="flex items-center justify-center gap-1.5 mb-1.5">
-                <svg className="h-3.5 w-3.5 text-brand-teal" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                  <path fillRule="evenodd" d="M5 2a1 1 0 011 1v1h1a1 1 0 010 2H6v1a1 1 0 01-2 0V6H3a1 1 0 010-2h1V3a1 1 0 011-1zm0 10a1 1 0 011 1v1h1a1 1 0 110 2H6v1a1 1 0 11-2 0v-1H3a1 1 0 110-2h1v-1a1 1 0 011-1zM12 2a1 1 0 01.967.744L14.146 7.2 17.5 9.134a1 1 0 010 1.732l-3.354 1.935-1.18 4.455a1 1 0 01-1.933 0L9.854 12.8 6.5 10.866a1 1 0 010-1.732l3.354-1.935 1.18-4.455A1 1 0 0112 2z" clipRule="evenodd" />
-                </svg>
-                <h2
-                  id="trial-demo-heading"
-                  className="text-xs font-extrabold uppercase tracking-wider text-ink-primary"
-                >
-                  Try Demo — Sample Data Only
-                </h2>
-              </div>
-              <p className="mb-3 text-xs text-ink-secondary">
-                Explore MediMate with preloaded sample medications. No account needed.
-              </p>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                <motion.button
-                  type="button"
-                  disabled={isSubmitting}
-                  onClick={() => handleDemoLogin('elderly')}
-                  {...(!reducedMotion
-                    ? { whileHover: { y: -2 }, whileTap: { scale: 0.97 } }
-                    : {})}
-                  transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-                  className="flex min-h-touch w-full items-center justify-center gap-1.5 rounded-btn border border-ink-muted/30 bg-surface px-3 py-2.5 text-xs font-semibold text-ink-primary transition-colors hover:bg-brand-teal-light focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <span aria-hidden="true">👴</span>
-                  <span>Try Older Adult Demo (Ramesh Sharma)</span>
-                </motion.button>
-                <motion.button
-                  type="button"
-                  disabled={isSubmitting}
-                  onClick={() => handleDemoLogin('caregiver')}
-                  {...(!reducedMotion
-                    ? { whileHover: { y: -2 }, whileTap: { scale: 0.97 } }
-                    : {})}
-                  transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-                  className="flex min-h-touch w-full items-center justify-center gap-1.5 rounded-btn border border-ink-muted/30 bg-surface px-3 py-2.5 text-xs font-semibold text-ink-primary transition-colors hover:bg-brand-teal-light focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <span aria-hidden="true">👩‍⚕️</span>
-                  <span>Try Caregiver Demo (Priya Sharma)</span>
-                </motion.button>
-              </div>
+            <div className="flex items-center justify-center gap-1.5 mb-1.5">
+              <svg className="h-3.5 w-3.5 text-brand-teal" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                <path fillRule="evenodd" d="M5 2a1 1 0 011 1v1h1a1 1 0 010 2H6v1a1 1 0 01-2 0V6H3a1 1 0 010-2h1V3a1 1 0 011-1zm0 10a1 1 0 011 1v1h1a1 1 0 110 2H6v1a1 1 0 11-2 0v-1H3a1 1 0 110-2h1v-1a1 1 0 011-1zM12 2a1 1 0 01.967.744L14.146 7.2 17.5 9.134a1 1 0 010 1.732l-3.354 1.935-1.18 4.455a1 1 0 01-1.933 0L9.854 12.8 6.5 10.866a1 1 0 010-1.732l3.354-1.935 1.18-4.455A1 1 0 0112 2z" clipRule="evenodd" />
+              </svg>
+              <h2
+                id="trial-demo-heading"
+                className="text-[11px] font-bold uppercase tracking-wider text-ink-secondary"
+              >
+                Try Demo — Sample Data Only
+              </h2>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <motion.button
+                type="button"
+                disabled={isSubmitting}
+                onClick={() => handleDemoLogin('elderly')}
+                {...(!reducedMotion
+                  ? { whileHover: { y: -1 }, whileTap: { scale: 0.97 } }
+                  : {})}
+                transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+                className="flex min-h-touch w-full items-center justify-center gap-1.5 rounded-btn border border-ink-muted/30 bg-surface px-2.5 py-2 text-xs font-semibold text-ink-primary transition-colors hover:bg-canvas focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <span aria-hidden="true">👴</span>
+                <span>Try Older Adult Demo (Ramesh Sharma)</span>
+              </motion.button>
+              <motion.button
+                type="button"
+                disabled={isSubmitting}
+                onClick={() => handleDemoLogin('caregiver')}
+                {...(!reducedMotion
+                  ? { whileHover: { y: -1 }, whileTap: { scale: 0.97 } }
+                  : {})}
+                transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+                className="flex min-h-touch w-full items-center justify-center gap-1.5 rounded-btn border border-ink-muted/30 bg-surface px-2.5 py-2 text-xs font-semibold text-ink-primary transition-colors hover:bg-canvas focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <span aria-hidden="true">👩‍⚕️</span>
+                <span>Try Caregiver Demo (Priya Sharma)</span>
+              </motion.button>
             </div>
           </div>
         )}
