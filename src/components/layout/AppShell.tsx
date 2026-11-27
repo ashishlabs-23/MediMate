@@ -204,7 +204,28 @@ export function AppShell({ children }: AppShellProps) {
           className="max-w-5xl mx-auto flex flex-wrap items-center justify-between gap-2 px-4 py-3"
         >
           {/* Logo */}
-          <span className="text-xl font-bold tracking-tight select-none">MediMate</span>
+          <div className="flex items-center gap-2.5">
+            <span
+              aria-hidden="true"
+              className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-white/20 text-white shadow-sm"
+            >
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M12 21s-7-4.5-9-9.5C1.5 7.5 4.2 4 7.8 4c2 0 3.5 1 4.2 2.2C12.7 5 14.2 4 16.2 4 19.8 4 22.5 7.5 21 11.5 19 16.5 12 21 12 21z" />
+                <path d="M12 9v5" />
+                <path d="M9.5 11.5h5" />
+              </svg>
+            </span>
+            <span className="text-xl font-bold tracking-tight select-none">MediMate</span>
+          </div>
 
           {/* Dual Role Switcher (only for dual-role or demo users inside a router) */}
           {inRouter && canSwitchRole && <RoleSwitcher />}

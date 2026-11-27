@@ -643,9 +643,21 @@ export function LoginScreen() {
         {/* ── Compact Brand header ── */}
         <div className="mb-3.5 flex flex-col items-center text-center">
           <div className="flex items-center gap-2">
-            <div className="inline-flex h-8 w-8 items-center justify-center rounded-btn bg-brand-teal shadow-sm">
-              <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+            <div className="inline-flex h-8 w-8 items-center justify-center rounded-btn bg-brand-teal text-white shadow-sm">
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M12 21s-7-4.5-9-9.5C1.5 7.5 4.2 4 7.8 4c2 0 3.5 1 4.2 2.2C12.7 5 14.2 4 16.2 4 19.8 4 22.5 7.5 21 11.5 19 16.5 12 21 12 21z" />
+                <path d="M12 9v5" />
+                <path d="M9.5 11.5h5" />
               </svg>
             </div>
             <h1

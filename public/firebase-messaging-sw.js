@@ -14,7 +14,7 @@ importScripts('https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js
 importScripts('https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js');
 
 // ── Cache Configuration ──────────────────────────────────────────────────────
-const CACHE_NAME = 'medimate-static-v1';
+const CACHE_NAME = 'medimate-static-v2';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
