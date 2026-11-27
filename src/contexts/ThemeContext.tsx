@@ -21,8 +21,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     } catch { return 'system'; }
   });
 
-  const getSystemTheme = (): 'light' | 'dark' =>
-    window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  const getSystemTheme = (): 'light' | 'dark' => {
+    try {
+      if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }
+    } catch {}
+    return 'light';
+  };
 
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>(() =>
     theme === 'system' ? getSystemTheme() : theme
@@ -40,16 +46,25 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (theme !== 'system') return;
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    const handler = () => {
-      const resolved = mq.matches ? 'dark' : 'light';
-      setResolvedTheme(resolved);
-      document.documentElement.classList.remove('dark', 'light');
-      document.documentElement.classList.add(resolved);
-      document.documentElement.setAttribute('data-theme', resolved);
-    };
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    try {
+      const mq = window.matchMedia('(prefers-color-scheme: dark)');
+      if (!mq) return;
+      const handler = () => {
+        const resolved = mq.matches ? 'dark' : 'light';
+        setResolvedTheme(resolved);
+        document.documentElement.classList.remove('dark', 'light');
+        document.documentElement.classList.add(resolved);
+        document.documentElement.setAttribute('data-theme', resolved);
+      };
+      if (typeof mq.addEventListener === 'function') {
+        mq.addEventListener('change', handler);
+        return () => mq.removeEventListener('change', handler);
+      } else if (typeof (mq as any).addListener === 'function') {
+        (mq as any).addListener(handler);
+        return () => (mq as any).removeListener(handler);
+      }
+    } catch {}
   }, [theme]);
 
   function setTheme(t: ThemeMode) {
