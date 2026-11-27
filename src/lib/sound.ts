@@ -92,3 +92,90 @@ export function playConfirmationChime(): void {
     }
   }
 }
+
+/**
+ * Plays a gentle ascending melodic chime (523Hz -> 659Hz -> 784Hz) when a dose is due.
+ * Safe no-op if Web Audio API is unavailable or autoplay is blocked.
+ */
+export function playDueAlertTone(): void {
+  const AudioContextCtor = resolveAudioContextConstructor();
+  if (!AudioContextCtor) {
+    return;
+  }
+
+  let ctx: AudioContext | null = null;
+  try {
+    ctx = new AudioContextCtor();
+
+    if (ctx.state === 'suspended' && typeof ctx.resume === 'function') {
+      const resumeResult = ctx.resume();
+      if (resumeResult && typeof resumeResult.catch === 'function') {
+        resumeResult.catch(() => undefined);
+      }
+    }
+
+    const now = typeof ctx.currentTime === 'number' ? ctx.currentTime : 0;
+    const notes = [523.25, 659.25, 783.99]; // C5, E5, G5 major triad
+
+    notes.forEach((freq, idx) => {
+      if (!ctx) return;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const startAt = now + idx * 0.12;
+      const stopAt = startAt + 0.22;
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, startAt);
+      gain.gain.setValueAtTime(0.0001, startAt);
+      gain.gain.linearRampToValueAtTime(0.12, startAt + 0.02);
+      gain.gain.linearRampToValueAtTime(0.0001, stopAt);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(startAt);
+      osc.stop(stopAt);
+
+      if (idx === notes.length - 1) {
+        const activeCtx = ctx;
+        osc.onended = () => {
+          safeCloseAudioContext(activeCtx);
+        };
+      }
+    });
+  } catch {
+    if (ctx) {
+      safeCloseAudioContext(ctx);
+    }
+  }
+}
+
+/**
+ * Speaks a clear verbal reminder using the Web Speech Synthesis API.
+ * Safe no-op if speechSynthesis is unavailable or speaking is disabled.
+ */
+export function speakReminder(medicationName: string, dosage?: string): void {
+  try {
+    if (
+      typeof window === 'undefined' ||
+      !('speechSynthesis' in window) ||
+      typeof window.SpeechSynthesisUtterance === 'undefined'
+    ) {
+      return;
+    }
+    const cleanName = medicationName.trim();
+    if (!cleanName) return;
+
+    const text = dosage
+      ? `It is time to take your ${cleanName}, ${dosage}.`
+      : `It is time to take your ${cleanName}.`;
+
+    const utterance = new window.SpeechSynthesisUtterance(text);
+    utterance.rate = 0.9; // Clear, calm cadence for elderly listeners
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+  } catch {
+    // Ignore speech synthesis errors in restricted/headless environments
+  }
+}

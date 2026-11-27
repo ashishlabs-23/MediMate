@@ -254,7 +254,7 @@ export function DoseCard({ dose, onTaken, onSnooze, compact = false }: DoseCardP
             'transition-colors border-2',
             snoozeable
               ? 'bg-white border-snooze text-snooze hover:bg-snooze-bg active:bg-snooze-bg'
-              : 'bg-slate-100 border-slate-300 text-slate-400 cursor-not-allowed',
+              : 'bg-slate-100 dark:bg-slate-800 border-slate-400 dark:border-slate-600 text-slate-700 dark:text-slate-300 font-medium cursor-not-allowed',
           ].join(' ')}
           style={{ minHeight: '52px' }}
         >

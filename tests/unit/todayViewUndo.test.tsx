@@ -33,6 +33,8 @@ vi.mock('../../src/lib/firestore', () => ({
   ) => mockSubscribeToDoseLogs(patientId, date, cb, onErr),
   updateDoseLog: (doseId: string, patch: Partial<DoseLogDocument>) =>
     mockUpdateDoseLog(doseId, patch),
+  subscribeToCareCircle: vi.fn(() => vi.fn()),
+  createMedication: vi.fn(),
 }));
 
 vi.mock('../../src/lib/generateTodayLogs', () => ({

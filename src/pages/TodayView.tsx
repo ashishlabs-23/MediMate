@@ -17,13 +17,15 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Timestamp } from 'firebase/firestore';
-import { subscribeToDoseLogs, updateDoseLog } from '../lib/firestore';
-import { generateTodayLogs } from '../lib/generateTodayLogs';
-import { getMockDoses } from '../lib/mockData';
+import { Check, CheckCircle2, Link2, Mail, MessageCircle, Plus, Share2, Users } from 'lucide-react';
+import { createMedication, subscribeToCareCircle, subscribeToDoseLogs, updateDoseLog } from '../lib/firestore';
+import { generateTodayLogs, generateTodayLogsForMedication } from '../lib/generateTodayLogs';
+import { getMockCareCircle, getMockDoses } from '../lib/mockData';
 import { playConfirmationChime } from '../lib/sound';
 import { useReminderScheduler } from '../hooks/useReminderScheduler';
 import { evaluateDoseState } from '../domain/stateMachine';
 import { DoseCard } from '../components/dose/DoseCard';
+import { AddMedicationModal, type MedicationFormPayload } from '../components/caregiver/AddMedicationModal';
 import { AppShell } from '../components/layout/AppShell';
 import { useAuthContext } from '../contexts/AuthContext';
 import type { DoseLogDocument } from '../types/firestore';
@@ -73,6 +75,9 @@ export function TodayView() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [liveMessage, setLiveMessage] = useState('');
+  const [careInviteCode, setCareInviteCode] = useState<string>('MED-7892');
+  const [inviteLinkCopied, setInviteLinkCopied] = useState(false);
+  const [isAddMedModalOpen, setIsAddMedModalOpen] = useState(false);
   const [pendingUndo, setPendingUndo] = useState<PendingUndoCommit | null>(null);
   const pendingUndoRef = useRef<PendingUndoCommit | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
@@ -92,6 +97,119 @@ export function TodayView() {
         patientId === 'caregiver_priya' ||
         patientId.startsWith('demo_')));
   const effectivePatientId = patientId || (isDemoSession ? 'patient_ramesh' : '');
+
+  // Fetch or subscribe to care circle invite code
+  useEffect(() => {
+    if (!effectivePatientId) return;
+    if (isDemoSession || effectivePatientId === 'patient_ramesh') {
+      const demo = getMockCareCircle('patient_ramesh');
+      setCareInviteCode(demo.inviteCode || 'MED-7892');
+      return;
+    }
+    if (typeof subscribeToCareCircle !== 'function') {
+      return;
+    }
+    const unsub = subscribeToCareCircle(
+      effectivePatientId,
+      (circle) => {
+        if (circle?.inviteCode) {
+          setCareInviteCode(circle.inviteCode);
+        }
+      },
+      (err) => {
+        console.warn('Could not subscribe to care circle in TodayView:', err);
+      }
+    );
+    return () => {
+      unsub();
+    };
+  }, [effectivePatientId, isDemoSession]);
+
+  const careInviteLink =
+    typeof window !== 'undefined' && window.location.origin
+      ? `${window.location.origin}/join?code=${encodeURIComponent(careInviteCode)}`
+      : `/join?code=${encodeURIComponent(careInviteCode)}`;
+
+  const handleCopyInviteLink = async () => {
+    let copied = false;
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(careInviteLink);
+        copied = true;
+      }
+    } catch {
+      copied = false;
+    }
+    if (copied) {
+      setInviteLinkCopied(true);
+      setLiveMessage('Care Circle invite link copied to clipboard.');
+      window.setTimeout(() => setInviteLinkCopied(false), 3000);
+    }
+  };
+
+  const whatsappShareUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(
+    `Join my Care Circle on MediMate to stay updated on my medications: ${careInviteLink}`
+  )}`;
+
+  const mailtoShareUrl = `mailto:?subject=${encodeURIComponent(
+    'Join my MediMate Care Circle'
+  )}&body=${encodeURIComponent(
+    `Hello,\n\nPlease join my Care Circle on MediMate to help monitor my daily medications.\n\nClick the link to join directly:\n${careInviteLink}\n\nInvite Code: ${careInviteCode}\n`
+  )}`;
+
+  const canNativeShare =
+    typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+
+  const handleNativeShare = async () => {
+    if (canNativeShare) {
+      try {
+        await navigator.share({
+          title: 'MediMate Care Circle Invite',
+          text: 'Join my Care Circle on MediMate to stay updated on my medications:',
+          url: careInviteLink,
+        });
+      } catch {
+        // user cancelled
+      }
+    }
+  };
+
+  const handleSaveMedication = async (payload: MedicationFormPayload) => {
+    if (!effectivePatientId) return;
+    try {
+      if (isDemoSession) {
+        setIsAddMedModalOpen(false);
+        setLiveMessage(`Prescription for ${payload.name} added.`);
+        return;
+      }
+      const schedule = {
+        times: payload.times,
+        frequency: payload.frequency,
+        ...(payload.frequency === 'specific_days' && payload.daysOfWeek
+          ? { daysOfWeek: payload.daysOfWeek }
+          : {}),
+        startDate: todayISO(),
+        endDate: null,
+      };
+      const created = await createMedication({
+        patientId: effectivePatientId,
+        name: payload.name,
+        dosage: payload.dosage,
+        instructions: payload.instructions,
+        schedule,
+        shape: payload.shape,
+        color: payload.color,
+        active: true,
+        createdBy: effectivePatientId,
+      });
+      await generateTodayLogsForMedication(created);
+      setIsAddMedModalOpen(false);
+      setLiveMessage(`Prescription for ${payload.name} added.`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to add medication';
+      setErrorMsg(msg);
+    }
+  };
 
   const commitDoseUpdate = useCallback(
     (doseId: string, patch: DoseUpdatePatch) => {
@@ -223,8 +341,8 @@ export function TodayView() {
       const isEarly = dose.status === 'scheduled' && now.getTime() < scheduledDate.getTime();
       const diffMinutes = Math.round((scheduledDate.getTime() - now.getTime()) / 60000);
 
-      // If patient takes medicine early (within 60m, e.g. early breakfast), allow graceful confirmation
-      const evaluationTime = isEarly && diffMinutes <= 60 ? scheduledDate : now;
+      // If patient takes medicine early (within 120m, e.g. early breakfast), allow graceful confirmation
+      const evaluationTime = isEarly && diffMinutes <= 120 ? scheduledDate : now;
 
       let result;
       try {
@@ -237,8 +355,15 @@ export function TodayView() {
           action: 'tapTaken',
         });
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Cannot mark taken';
-        setErrorMsg(msg);
+        if (isEarly && diffMinutes > 120) {
+          const timeStr = scheduledDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          setErrorMsg(
+            `This dose is scheduled for ${timeStr} (in ${diffMinutes} minutes). Doses can be confirmed up to 2 hours in advance.`
+          );
+        } else {
+          const msg = err instanceof Error ? err.message : 'Cannot mark taken';
+          setErrorMsg(msg);
+        }
         return;
       }
 
@@ -259,6 +384,18 @@ export function TodayView() {
 
       if (userProfile?.accessibilityPreferences?.soundEnabled !== false) {
         playConfirmationChime();
+      }
+
+      if (
+        userProfile?.accessibilityPreferences?.hapticFeedback !== false &&
+        typeof navigator !== 'undefined' &&
+        'vibrate' in navigator
+      ) {
+        try {
+          navigator.vibrate(80);
+        } catch {
+          // Ignore vibrate restrictions
+        }
       }
 
       setLiveMessage(
@@ -341,6 +478,18 @@ export function TodayView() {
 
       setLiveMessage(`${dose.medicationName} snoozed for 10 minutes.`);
 
+      if (
+        userProfile?.accessibilityPreferences?.hapticFeedback !== false &&
+        typeof navigator !== 'undefined' &&
+        'vibrate' in navigator
+      ) {
+        try {
+          navigator.vibrate([40, 40, 40]);
+        } catch {
+          // Ignore vibrate restrictions
+        }
+      }
+
       if (!isDemoSession) {
         try {
           await updateDoseLog(doseId, {
@@ -363,15 +512,28 @@ export function TodayView() {
     doses.find((d) => d.status === 'scheduled') ??
     null;
 
+  const allDosesTaken = doses.length > 0 && doses.every((d) => d.status === 'taken');
+
   return (
     <AppShell>
       <div className="max-w-lg mx-auto px-4 py-6 pb-24">
         {/* Greeting — 28px bold per DESIGN.md §4.2 */}
-        <header className="mb-6">
-          <p className="text-sm text-ink-secondary mb-1">{friendlyDate()}</p>
-          <h1 className="text-[1.75rem] font-bold leading-snug text-ink-primary">
-            Hello, {displayName} 👋
-          </h1>
+        <header className="mb-6 flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm text-ink-secondary mb-1">{friendlyDate()}</p>
+            <h1 className="text-[1.75rem] font-bold leading-snug text-ink-primary">
+              Hello, {displayName} 👋
+            </h1>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsAddMedModalOpen(true)}
+            aria-label="Add a medication"
+            className="min-h-touch min-w-touch shrink-0 inline-flex items-center gap-1.5 px-3.5 py-2 rounded-btn bg-brand-teal text-white text-xs sm:text-sm font-semibold hover:bg-brand-teal-dark focus:outline-none focus:ring-[3px] focus:ring-focus focus:ring-offset-2 transition-colors shadow-sm"
+          >
+            <Plus className="w-4 h-4" aria-hidden="true" />
+            <span>Add Med</span>
+          </button>
         </header>
 
         {/* Aria live region for confirmations */}
@@ -410,7 +572,7 @@ export function TodayView() {
         {!isLoading && doses.length === 0 && (
           <div
             data-testid="empty-today-state"
-            className="rounded-card bg-surface border border-slate-200 p-8 text-center space-y-3"
+            className="rounded-card bg-surface border border-slate-200 p-8 text-center space-y-4"
           >
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-teal-50 text-brand-teal">
               <span className="text-2xl" aria-hidden="true">💊</span>
@@ -419,9 +581,41 @@ export function TodayView() {
               No prescriptions scheduled today
             </h2>
             <p className="text-sm text-ink-secondary max-w-sm mx-auto">
-              You are all caught up! Your caregiver can add or adjust prescriptions from the Caregiver Dashboard.
+              You are all caught up! You or your caregiver can add or adjust prescriptions anytime.
             </p>
+            <div className="pt-2 flex justify-center">
+              <button
+                type="button"
+                onClick={() => setIsAddMedModalOpen(true)}
+                aria-label="Add a medication"
+                className="min-h-touch min-w-touch inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-btn bg-brand-teal text-white font-semibold text-sm hover:bg-brand-teal-dark focus:outline-none focus:ring-[3px] focus:ring-focus focus:ring-offset-2 transition-colors shadow-sm"
+              >
+                <Plus className="w-4 h-4" aria-hidden="true" />
+                <span>+ Add Medication</span>
+              </button>
+            </div>
             <p className="text-xs text-ink-muted">Enjoy your day! 🌟</p>
+          </div>
+        )}
+
+        {/* All Doses Taken Celebration Banner */}
+        {!isLoading && allDosesTaken && (
+          <div
+            data-testid="all-doses-celebration"
+            className="mb-6 rounded-card border-2 border-emerald-500 bg-emerald-50/90 dark:bg-emerald-950/40 p-6 text-center space-y-2 shadow-sm"
+          >
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300">
+              <CheckCircle2 className="w-8 h-8" aria-hidden="true" />
+            </div>
+            <h2 className="text-xl font-bold text-emerald-950 dark:text-emerald-100">
+              All Done for Today! 🎉
+            </h2>
+            <p className="text-base text-emerald-900 dark:text-emerald-200 font-medium max-w-sm mx-auto">
+              Great job, {displayName}! You have taken all your scheduled medications for today.
+            </p>
+            <p className="text-xs text-emerald-700 dark:text-emerald-400">
+              Relax and enjoy the rest of your day! 🌟
+            </p>
           </div>
         )}
 
@@ -463,9 +657,96 @@ export function TodayView() {
             </div>
           </section>
         )}
+        {/* Family & Care Circle Sharing Section */}
+        <section
+          aria-labelledby="family-care-circle-heading"
+          className="mt-8 rounded-card border border-teal-200 bg-teal-50/60 dark:bg-slate-800/80 dark:border-slate-700 p-5 space-y-3"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Users className="w-5 h-5 text-brand-teal" aria-hidden="true" />
+              <h2
+                id="family-care-circle-heading"
+                className="text-base font-bold text-ink-primary"
+              >
+                Family &amp; Care Circle
+              </h2>
+            </div>
+            <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-300">
+              Active
+            </span>
+          </div>
+
+          <p className="text-xs text-ink-secondary leading-relaxed">
+            Share this code or link with your family so they can stay updated on your medication progress:
+          </p>
+
+          <div className="flex items-center gap-2">
+            <code
+              aria-label={`Your Care Circle invite code is ${careInviteCode}`}
+              className="flex-1 min-h-[44px] px-3.5 py-2 rounded-btn border border-teal-300 bg-surface font-mono text-base font-bold tracking-widest text-brand-teal select-all flex items-center"
+            >
+              {careInviteCode}
+            </code>
+            <button
+              type="button"
+              onClick={() => void handleCopyInviteLink()}
+              aria-label="Direct share link"
+              className="min-h-touch min-w-touch inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-btn bg-brand-teal text-white text-xs font-semibold hover:bg-brand-teal-dark focus:outline-none focus:ring-[3px] focus:ring-focus focus:ring-offset-2 transition-colors shrink-0"
+            >
+              {inviteLinkCopied ? (
+                <Check className="w-4 h-4" aria-hidden="true" />
+              ) : (
+                <Link2 className="w-4 h-4" aria-hidden="true" />
+              )}
+              <span>{inviteLinkCopied ? 'Copied!' : 'Copy Link'}</span>
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <span className="text-xs text-ink-muted font-medium">Send to family:</span>
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof window !== 'undefined') {
+                  window.open(whatsappShareUrl, '_blank', 'noopener,noreferrer');
+                }
+              }}
+              aria-label="Share via WhatsApp"
+              className="min-h-touch min-w-touch inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-focus transition-colors"
+            >
+              <MessageCircle className="w-3.5 h-3.5 text-emerald-600" aria-hidden="true" />
+              <span>WhatsApp</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof window !== 'undefined') {
+                  window.location.href = mailtoShareUrl;
+                }
+              }}
+              aria-label="Share via Mail app"
+              className="min-h-touch min-w-touch inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full bg-blue-50 text-blue-800 hover:bg-blue-100 border border-blue-200 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-focus transition-colors"
+            >
+              <Mail className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />
+              <span>Mail</span>
+            </button>
+            {canNativeShare && (
+              <button
+                type="button"
+                onClick={() => void handleNativeShare()}
+                aria-label="Share via device"
+                className="min-h-touch min-w-touch inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100 text-ink hover:bg-slate-200 border border-slate-300 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-focus transition-colors"
+              >
+                <Share2 className="w-3.5 h-3.5 text-ink-secondary" aria-hidden="true" />
+                <span>Share…</span>
+              </button>
+            )}
+          </div>
+        </section>
       </div>
 
-      {/* 5-second Undo Toast for accidental "Taken ✓" taps */}
+      {/* 8-second Undo Toast for accidental "Taken ✓" taps */}
       {pendingUndo && (
         <div
           id="undo-toast"
@@ -490,6 +771,13 @@ export function TodayView() {
           </button>
         </div>
       )}
+
+      {/* Add Medication Modal for Seniors */}
+      <AddMedicationModal
+        isOpen={isAddMedModalOpen}
+        onClose={() => setIsAddMedModalOpen(false)}
+        onSave={handleSaveMedication}
+      />
     </AppShell>
   );
 }

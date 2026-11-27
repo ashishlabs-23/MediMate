@@ -22,6 +22,7 @@
 import { useEffect, useRef } from 'react';
 import { getDoseLog, updateDoseLog } from '../lib/firestore';
 import { GENTLE_REMINDER_OFFSET_MS, ESCALATION_OFFSET_MS, SNOOZE_DURATION_MS } from '../domain/intervals';
+import { playDueAlertTone, speakReminder } from '../lib/sound';
 import type { DoseLogDocument } from '../types/firestore';
 
 // Notification permission is requested once and remembered.
@@ -186,6 +187,8 @@ export function useReminderScheduler(
               `${dose.dosage} — please take now.`,
               `due-${dose.id}`
             );
+            playDueAlertTone();
+            speakReminder(dose.medicationName, dose.dosage);
             writeDosePatch(dose.id, { status: 'due' });
           }, dueDelay)
         );
@@ -263,6 +266,8 @@ export function useReminderScheduler(
                 `You haven't confirmed ${dose.dosage} yet. Please take or snooze.`,
                 `gentle-${dose.id}`
               );
+              playDueAlertTone();
+              speakReminder(dose.medicationName, dose.dosage);
               writeDosePatch(dose.id, { followUpSent: true });
             }, gentleDelay)
           );

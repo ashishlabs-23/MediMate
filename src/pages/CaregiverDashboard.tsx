@@ -182,7 +182,10 @@ export function CaregiverDashboard() {
   const demoCircleMutatedRef = useRef(false);
 
   const currentUid = firebaseUser?.uid ?? '';
-  const isCaregiverRole = userProfile?.role === 'caregiver' || currentUid.includes('caregiver');
+  const isCaregiverRole =
+    userProfile?.role === 'caregiver' ||
+    userProfile?.role === 'dual' ||
+    currentUid.includes('caregiver');
 
   // Detect demo session: loginAsDemo() sets a mock uid that is not a real Firebase Auth token.
   // In test environment (Vitest), mockDb is used so we allow normal Firestore subscription flow.
@@ -261,8 +264,8 @@ export function CaregiverDashboard() {
     if (isDemoSession || currentUid === 'caregiver_priya') {
       return 'patient_ramesh';
     }
-    return null;
-  }, [isCaregiverRole, currentUid, selectedPatientId, linkedCircles, isDemoSession]);
+    return userProfile?.role === 'dual' ? currentUid : null;
+  }, [isCaregiverRole, currentUid, selectedPatientId, linkedCircles, isDemoSession, userProfile?.role]);
 
   // Keep selectedPatientId in sync when linkedCircles changes (e.g. mid-session revocation)
   useEffect(() => {

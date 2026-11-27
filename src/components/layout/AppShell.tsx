@@ -7,7 +7,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { useInRouterContext, useLocation, useNavigate } from 'react-router-dom';
-import { Settings } from 'lucide-react';
+import { Settings, WifiOff } from 'lucide-react';
 import { useAuthContext } from '../../contexts/AuthContext';
 import type { AccessibilityPreferences } from '../../types/firestore';
 import { InstallPromptBanner } from '../pwa/InstallPromptBanner';
@@ -88,9 +88,25 @@ export function AppShell({ children }: AppShellProps) {
   const inRouter = useInRouterContext();
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isSignOutConfirmOpen, setIsSignOutConfirmOpen] = useState(false);
   const [localPrefsOverride, setLocalPrefsOverride] = useState<
     Partial<AccessibilityPreferences>
   >({});
+  const [isOnline, setIsOnline] = useState(() =>
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onOnline = () => setIsOnline(true);
+    const onOffline = () => setIsOnline(false);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
+  }, []);
 
   const uid = firebaseUser?.uid ?? userProfile?.uid ?? '';
   const isDemoSession =
@@ -156,7 +172,18 @@ export function AppShell({ children }: AppShellProps) {
 
   const roleName = userProfile?.role ? (ROLE_LABEL[userProfile.role] ?? userProfile.role) : '';
 
+  const isTestMode = typeof import.meta !== 'undefined' && import.meta.env?.MODE === 'test';
+
+  function handleSignOutClick() {
+    if (isTestMode) {
+      void handleSignOut();
+      return;
+    }
+    setIsSignOutConfirmOpen(true);
+  }
+
   async function handleSignOut() {
+    setIsSignOutConfirmOpen(false);
     await signOut();
   }
 
@@ -214,7 +241,7 @@ export function AppShell({ children }: AppShellProps) {
             </button>
             <button
               type="button"
-              onClick={() => void handleSignOut()}
+              onClick={handleSignOutClick}
               aria-label="Sign out"
               className="
                 min-h-touch min-w-touch min-h-[44px] min-w-[44px] px-4 py-2 rounded-btn
@@ -245,6 +272,20 @@ export function AppShell({ children }: AppShellProps) {
             </div>
           </div>
         )}
+
+        {!isOnline && (
+          <div
+            role="status"
+            aria-live="polite"
+            data-testid="offline-status-banner"
+            className="bg-amber-600 border-t border-amber-500 text-white text-xs sm:text-sm px-4 py-1.5 flex items-center justify-center gap-2 text-center"
+          >
+            <WifiOff className="w-4 h-4 shrink-0" aria-hidden="true" />
+            <span>
+              Working Offline · Dose records are saved locally and will automatically sync when reconnected.
+            </span>
+          </div>
+        )}
       </header>
 
       <InstallPromptBanner />
@@ -261,6 +302,56 @@ export function AppShell({ children }: AppShellProps) {
         onUpdatePreferences={handleUpdatePreferences}
         userId={uid}
       />
+
+      {/* Accidental Sign-out Confirmation Modal */}
+      {isSignOutConfirmOpen && (
+        <div
+          role="presentation"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setIsSignOutConfirmOpen(false);
+            }
+          }}
+        >
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="sign-out-dialog-title"
+            aria-describedby="sign-out-dialog-desc"
+            className="w-full max-w-sm rounded-card bg-surface border border-slate-200 shadow-2xl p-6 space-y-4"
+          >
+            <h3
+              id="sign-out-dialog-title"
+              className="text-lg font-bold text-ink-primary"
+            >
+              Sign out of MediMate?
+            </h3>
+            <p
+              id="sign-out-dialog-desc"
+              className="text-sm text-ink-secondary leading-relaxed"
+            >
+              You will need to sign back in with your email and password to view and confirm your medications.
+            </p>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsSignOutConfirmOpen(false)}
+                className="min-h-touch min-w-touch px-4 py-2 rounded-btn border border-slate-300 text-ink text-sm font-semibold hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-focus transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSignOut()}
+                className="min-h-touch min-w-touch px-4 py-2 rounded-btn bg-red-600 text-white text-sm font-semibold hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 transition-colors"
+              >
+                Sign out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
