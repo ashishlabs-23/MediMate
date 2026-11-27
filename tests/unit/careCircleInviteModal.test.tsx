@@ -759,4 +759,52 @@ describe('inviteCareCircleMember Firestore helper', () => {
       })
     );
   });
+
+  it('U-4D-12: provides direct shareable invite link with copy and messaging send options', async () => {
+    const writeTextSpy = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: writeTextSpy },
+    });
+
+    render(
+      <CareCircleInviteModal
+        isOpen={true}
+        onClose={vi.fn()}
+        inviteCode="MED-LINK1"
+        existingEmails={[]}
+        onInviteMember={vi.fn()}
+        patientName="Dad"
+      />
+    );
+
+    const dialog = screen.getByRole('dialog');
+    const linkInput = within(dialog).getByLabelText('Direct invite link') as HTMLInputElement;
+    expect(linkInput).toBeInTheDocument();
+    expect(linkInput.value).toContain('/join?code=MED-LINK1');
+
+    // Copy link button
+    const shareLinkBtn = within(dialog).getByRole('button', { name: 'Direct share link' });
+    await act(async () => {
+      fireEvent.click(shareLinkBtn);
+    });
+
+    expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('/join?code=MED-LINK1'));
+    expect(screen.getByRole('status')).toHaveTextContent(/Invite link copied to clipboard/i);
+
+    // WhatsApp send check
+    const waOpenSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const waBtn = within(dialog).getByRole('button', { name: 'Share via WhatsApp' });
+    fireEvent.click(waBtn);
+    expect(waOpenSpy).toHaveBeenCalledWith(
+      expect.stringContaining('api.whatsapp.com'),
+      '_blank',
+      'noopener,noreferrer'
+    );
+    waOpenSpy.mockRestore();
+
+    // Mail send check
+    const mailBtn = within(dialog).getByRole('button', { name: 'Share via Mail app' });
+    expect(mailBtn).toBeInTheDocument();
+  });
 });

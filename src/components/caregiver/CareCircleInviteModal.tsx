@@ -12,7 +12,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Timestamp } from 'firebase/firestore';
-import { Check, Copy, Mail, Send, X } from 'lucide-react';
+import { Check, Copy, Link2, Mail, MessageCircle, Send, Share2, X } from 'lucide-react';
 import type {
   CareCircleMember,
   CareCircleMemberRole,
@@ -114,8 +114,13 @@ export function CareCircleInviteModal({
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const wasOpenRef = useRef(false);
   const copyTimerRef = useRef<number | null>(null);
+  const linkTimerRef = useRef<number | null>(null);
 
   const effectiveCode = inviteCode.trim() || 'MED-7892';
+  const inviteLink =
+    typeof window !== 'undefined' && window.location.origin
+      ? `${window.location.origin}/join?code=${encodeURIComponent(effectiveCode)}`
+      : `/join?code=${encodeURIComponent(effectiveCode)}`;
 
   const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -124,6 +129,7 @@ export function CareCircleInviteModal({
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [linkCopied, setLinkCopied] = useState(false);
   const [copyAnnouncement, setCopyAnnouncement] = useState('');
   const [invitedConfirmation, setInvitedConfirmation] = useState<InvitedConfirmation | null>(null);
 
@@ -140,6 +146,7 @@ export function CareCircleInviteModal({
       setError(null);
       setIsSubmitting(false);
       setCopyStatus('idle');
+      setLinkCopied(false);
       setCopyAnnouncement('');
       setInvitedConfirmation(null);
 
@@ -159,6 +166,10 @@ export function CareCircleInviteModal({
         window.clearTimeout(copyTimerRef.current);
         copyTimerRef.current = null;
       }
+      if (linkTimerRef.current !== null) {
+        window.clearTimeout(linkTimerRef.current);
+        linkTimerRef.current = null;
+      }
       const target = previousFocusRef.current;
       previousFocusRef.current = null;
       if (target && typeof target.focus === 'function') {
@@ -175,6 +186,10 @@ export function CareCircleInviteModal({
       if (copyTimerRef.current !== null) {
         window.clearTimeout(copyTimerRef.current);
         copyTimerRef.current = null;
+      }
+      if (linkTimerRef.current !== null) {
+        window.clearTimeout(linkTimerRef.current);
+        linkTimerRef.current = null;
       }
       if (wasOpenRef.current) {
         wasOpenRef.current = false;
@@ -291,6 +306,87 @@ export function CareCircleInviteModal({
     }
   }
 
+  async function handleCopyLink() {
+    let copied = false;
+    try {
+      if (
+        typeof navigator !== 'undefined' &&
+        navigator.clipboard &&
+        typeof navigator.clipboard.writeText === 'function'
+      ) {
+        await navigator.clipboard.writeText(inviteLink);
+        copied = true;
+      }
+    } catch {
+      copied = false;
+    }
+
+    if (!copied && typeof document !== 'undefined' && typeof document.execCommand === 'function') {
+      let textarea: HTMLTextAreaElement | null = null;
+      try {
+        textarea = document.createElement('textarea');
+        textarea.value = inviteLink;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-9999px';
+        textarea.style.top = '0';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        copied = Boolean(document.execCommand('copy'));
+      } catch {
+        copied = false;
+      } finally {
+        if (textarea && textarea.parentNode) {
+          textarea.parentNode.removeChild(textarea);
+        }
+      }
+    }
+
+    if (copied) {
+      setLinkCopied(true);
+      setCopyAnnouncement('Invite link copied to clipboard.');
+      if (linkTimerRef.current !== null) {
+        window.clearTimeout(linkTimerRef.current);
+      }
+      linkTimerRef.current = window.setTimeout(() => {
+        setLinkCopied(false);
+        linkTimerRef.current = null;
+      }, 3000);
+    } else {
+      setCopyAnnouncement('Automatic copy unavailable. Please copy the invite link manually.');
+    }
+  }
+
+  async function handleNativeShare() {
+    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+      try {
+        await navigator.share({
+          title: 'MediMate Care Circle Invite',
+          text: `Join ${patientName?.trim() || 'our family'}'s Care Circle on MediMate to help monitor medications:`,
+          url: inviteLink,
+        });
+      } catch {
+        // User cancelled or share dismissed
+      }
+    }
+  }
+
+  const whatsappShareUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(
+    `Join ${patientName?.trim() || 'our family'}'s Care Circle on MediMate to help monitor medications: ${inviteLink}`
+  )}`;
+
+  const mailtoQuickHref = `mailto:?subject=${encodeURIComponent(
+    `Join ${patientName?.trim() || 'our family'}'s Care Circle on MediMate`
+  )}&body=${encodeURIComponent(
+    `Hello,\n\nYou have been invited to join the Care Circle for ${
+      patientName?.trim() || 'our family member'
+    } on MediMate to help monitor medications.\n\nClick the link to join directly:\n${inviteLink}\n\nCare Circle Invite Code: ${effectiveCode}\n`
+  )}`;
+
+  const canNativeShare =
+    typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+
   function togglePermission(perm: CareCirclePermission) {
     if (error) {
       setError(null);
@@ -400,41 +496,123 @@ export function CareCircleInviteModal({
 
         {/* Body */}
         <div className="p-6 space-y-6">
-          {/* Invite Code Section */}
+          {/* Invite Code & Direct Link Section */}
           <section
             aria-labelledby="invite-code-heading"
-            className="rounded-btn border border-slate-200 bg-slate-50/70 p-4 space-y-2.5"
+            className="rounded-btn border border-slate-200 bg-slate-50/70 p-4 space-y-3.5"
           >
-            <div className="flex items-center justify-between gap-2">
-              <h3
-                id="invite-code-heading"
-                className="text-xs font-bold uppercase tracking-wider text-ink-secondary"
-              >
-                Share Care Circle Invite Code
-              </h3>
+            {/* Invite Code */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <h3
+                  id="invite-code-heading"
+                  className="text-xs font-bold uppercase tracking-wider text-ink-secondary"
+                >
+                  Share Care Circle Invite Code
+                </h3>
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <code
+                  aria-label={`Care Circle invite code ${effectiveCode}`}
+                  className="flex-1 min-h-touch inline-flex items-center px-3.5 py-2 rounded-btn border border-slate-200 bg-surface font-mono text-lg font-bold tracking-widest text-brand-teal select-all"
+                >
+                  {effectiveCode}
+                </code>
+                <button
+                  ref={copyButtonRef}
+                  type="button"
+                  onClick={() => void handleCopyCode()}
+                  aria-label={copyStatus === 'copied' ? 'Copy code (Copied)' : 'Copy code'}
+                  className="min-h-touch min-w-touch inline-flex items-center justify-center gap-2 px-4 py-2 rounded-btn bg-brand-teal text-white text-sm font-semibold hover:bg-brand-teal-dark focus:outline-none focus:ring-[3px] focus:ring-focus focus:ring-offset-2 transition-colors shrink-0"
+                >
+                  {copyStatus === 'copied' ? (
+                    <Check className="w-4 h-4" aria-hidden="true" />
+                  ) : (
+                    <Copy className="w-4 h-4" aria-hidden="true" />
+                  )}
+                  <span>{copyStatus === 'copied' ? 'Copied!' : 'Copy Code'}</span>
+                </button>
+              </div>
             </div>
 
-            <div className="flex items-center justify-between gap-3">
-              <code
-                aria-label={`Care Circle invite code ${effectiveCode}`}
-                className="flex-1 min-h-touch inline-flex items-center px-3.5 py-2 rounded-btn border border-slate-200 bg-surface font-mono text-lg font-bold tracking-widest text-brand-teal select-all"
-              >
-                {effectiveCode}
-              </code>
-              <button
-                ref={copyButtonRef}
-                type="button"
-                onClick={() => void handleCopyCode()}
-                aria-label={copyStatus === 'copied' ? 'Copy code (Copied)' : 'Copy code'}
-                className="min-h-touch min-w-touch inline-flex items-center justify-center gap-2 px-4 py-2 rounded-btn bg-brand-teal text-white text-sm font-semibold hover:bg-brand-teal-dark focus:outline-none focus:ring-[3px] focus:ring-focus focus:ring-offset-2 transition-colors shrink-0"
-              >
-                {copyStatus === 'copied' ? (
-                  <Check className="w-4 h-4" aria-hidden="true" />
-                ) : (
-                  <Copy className="w-4 h-4" aria-hidden="true" />
+            {/* Direct Shareable Link */}
+            <div className="pt-3 border-t border-slate-200/90 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-ink-secondary">
+                  Shareable Invite Link
+                </h4>
+                <span className="text-[11px] font-medium text-ink-muted">One-click join</span>
+              </div>
+              <p className="text-xs text-ink-muted leading-relaxed">
+                Send this link so family members can directly join and monitor {patientName?.trim() || 'the older adult'}:
+              </p>
+
+              <div className="flex items-center justify-between gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={inviteLink}
+                  aria-label="Direct invite link"
+                  onClick={(e) => (e.target as HTMLInputElement).select()}
+                  className="flex-1 min-h-[44px] px-3.5 py-2 rounded-btn border border-slate-200 bg-surface font-mono text-xs text-ink select-all focus:outline-none focus:ring-2 focus:ring-focus truncate"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleCopyLink()}
+                  aria-label="Direct share link"
+                  className="min-h-touch min-w-touch inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-btn bg-slate-100 hover:bg-slate-200 border border-slate-300 text-ink text-xs font-semibold focus:outline-none focus:ring-[3px] focus:ring-focus focus:ring-offset-2 transition-colors shrink-0"
+                >
+                  {linkCopied ? (
+                    <Check className="w-4 h-4 text-emerald-600" aria-hidden="true" />
+                  ) : (
+                    <Link2 className="w-4 h-4 text-ink-secondary" aria-hidden="true" />
+                  )}
+                  <span>{linkCopied ? 'Link Copied!' : 'Copy Link'}</span>
+                </button>
+              </div>
+
+              {/* Quick Send Options */}
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <span className="text-xs text-ink-muted font-medium">Send via:</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (typeof window !== 'undefined') {
+                      window.open(whatsappShareUrl, '_blank', 'noopener,noreferrer');
+                    }
+                  }}
+                  aria-label="Share via WhatsApp"
+                  className="min-h-touch min-w-touch inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-full bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-focus transition-colors"
+                >
+                  <MessageCircle className="w-3.5 h-3.5 text-emerald-600" aria-hidden="true" />
+                  <span>WhatsApp</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (typeof window !== 'undefined') {
+                      window.location.href = mailtoQuickHref;
+                    }
+                  }}
+                  aria-label="Share via Mail app"
+                  className="min-h-touch min-w-touch inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-full bg-blue-50 text-blue-800 hover:bg-blue-100 border border-blue-200 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-focus transition-colors"
+                >
+                  <Mail className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />
+                  <span>Mail</span>
+                </button>
+                {canNativeShare && (
+                  <button
+                    type="button"
+                    onClick={() => void handleNativeShare()}
+                    aria-label="Share via device"
+                    className="min-h-touch min-w-touch inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-full bg-slate-100 text-ink hover:bg-slate-200 border border-slate-300 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-focus transition-colors"
+                  >
+                    <Share2 className="w-3.5 h-3.5 text-ink-secondary" aria-hidden="true" />
+                    <span>Share…</span>
+                  </button>
                 )}
-                <span>{copyStatus === 'copied' ? 'Copied!' : 'Copy Code'}</span>
-              </button>
+              </div>
             </div>
 
             <p

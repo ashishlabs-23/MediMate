@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useSearchParams } from 'react-router-dom';
 import { AuthProvider, useAuthContext } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { useAuth } from './hooks/useAuth';
@@ -34,12 +34,22 @@ export function RequireAuth({
   requiredRole?: 'elderly' | 'caregiver';
 }) {
   const { firebaseUser, isLoading, userProfile, isDemo } = useAuthContext();
+  const location = useLocation();
 
   if (isLoading) {
     return <LoadingScreen />;
   }
 
   if (!firebaseUser) {
+    try {
+      const searchParams = new URLSearchParams(location.search);
+      const code = searchParams.get('code') || searchParams.get('invite');
+      if (code) {
+        sessionStorage.setItem('medimate_pending_invite_code', code);
+      }
+    } catch {
+      // Ignore storage errors
+    }
     return <Navigate to="/login" replace />;
   }
   if (!isDemo && requiresEmailVerification(firebaseUser)) {
@@ -94,11 +104,26 @@ function LoginRoute() {
   return <LoginScreen />;
 }
 
+function JoinRoute() {
+  const [searchParams] = useSearchParams();
+  const code = searchParams.get('code') || searchParams.get('invite') || '';
+  if (code) {
+    try {
+      sessionStorage.setItem('medimate_pending_invite_code', code);
+    } catch {
+      // Ignore storage errors
+    }
+  }
+  const target = code ? `/app/caregiver?code=${encodeURIComponent(code)}` : '/app/caregiver';
+  return <Navigate to={target} replace />;
+}
+
 export function AppRoutes() {
   return (
     <Routes>
       <Route path="/" element={<LandingRoute />} />
       <Route path="/welcome" element={<LandingPage />} />
+      <Route path="/join" element={<JoinRoute />} />
       <Route path="/login" element={<LoginRoute />} />
       <Route path="/verify-email" element={<EmailVerificationGate />} />
       <Route path="/complete-profile" element={<CompleteProfileGate />} />

@@ -194,6 +194,33 @@ export function CaregiverDashboard() {
         currentUid === 'caregiver_priya' ||
         currentUid.startsWith('demo_')));
 
+  // Auto-fill invite code from direct share link query params (?code= or ?invite=) or pending session
+  useEffect(() => {
+    let incomingCode: string | null = null;
+    if (typeof window !== 'undefined' && window.location) {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        incomingCode = params.get('code') || params.get('invite');
+        if (!incomingCode) {
+          incomingCode = sessionStorage.getItem('medimate_pending_invite_code');
+          if (incomingCode) {
+            sessionStorage.removeItem('medimate_pending_invite_code');
+          }
+        }
+      } catch {
+        // Ignore parsing/storage errors
+      }
+    }
+    if (incomingCode && !inviteCodeInput) {
+      const clean = incomingCode.trim().toUpperCase();
+      setInviteCodeInput(clean);
+      const inputEl = document.getElementById('invite-code-input');
+      if (inputEl) {
+        inputEl.focus();
+      }
+    }
+  }, []);
+
   // Subscribe to caregiver's linked care circles
   useEffect(() => {
     if (!isCaregiverRole || !currentUid) {
