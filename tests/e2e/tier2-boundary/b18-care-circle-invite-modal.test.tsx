@@ -87,6 +87,24 @@ vi.mock('@/lib/generateTodayLogs', () => ({
     bridge.generateTodayLogsForMedication(...args),
 }));
 
+vi.mock('@/lib/careCircleService', () => ({
+  generateInviteCode: () => bridge.generateInviteCode(),
+  lookupCareInvite: (code: string) => bridge.lookupCareInvite(code),
+  createOrSyncCareInvite: (input: Parameters<typeof bridge.createOrSyncCareInvite>[0]) =>
+    bridge.createOrSyncCareInvite(input),
+  subscribeToCareCirclesForCaregiver: (
+    caregiverUid: string,
+    cb: Parameters<typeof bridge.subscribeToCareCirclesForCaregiver>[1],
+    onErr?: Parameters<typeof bridge.subscribeToCareCirclesForCaregiver>[2]
+  ) => bridge.subscribeToCareCirclesForCaregiver(caregiverUid, cb, onErr),
+  getCareCirclesForCaregiver: (caregiverUid: string) =>
+    bridge.getCareCirclesForCaregiver(caregiverUid),
+  redeemCareInviteCode: (
+    rawCode: string,
+    caregiver: { uid: string; displayName: string; email: string }
+  ) => bridge.redeemCareInviteCode(rawCode, caregiver),
+}));
+
 import { CaregiverDashboard } from '@/pages/CaregiverDashboard';
 
 type Phase4AuthValue = AuthContextValue & {

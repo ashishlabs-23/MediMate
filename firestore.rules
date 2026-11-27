@@ -168,6 +168,7 @@ service cloud.firestore {
         && canAccessPatient(resource.data.patientId)
         && request.resource.data.patientId == resource.data.patientId
         && resource.data.status != 'taken'
+        && resource.data.status != 'missed'
         && request.resource.data.snoozeCount is int
         && request.resource.data.snoozeCount >= resource.data.snoozeCount
         && request.resource.data.snoozeCount <= 1;

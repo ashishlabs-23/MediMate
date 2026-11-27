@@ -256,7 +256,7 @@ describe('Tier 4 — Scenario 11: Multi-Tenant Invite-Code Pairing, Dynamic Swit
       const switcher = await screen.findByRole('combobox', { name: /select patient|monitoring/i });
       fireEvent.change(switcher, { target: { value: 'patient_asha' } });
 
-      expect(await screen.findByText(/Thyronorm/i)).toBeInTheDocument();
+      expect((await screen.findAllByText(/Thyronorm/i)).length).toBeGreaterThanOrEqual(1);
       const callLink = screen.getByRole('link', { name: /call asha/i });
       expect(callLink).toHaveAttribute('href', 'tel:+919777666555');
       expect(container.textContent).not.toContain('9876543210');

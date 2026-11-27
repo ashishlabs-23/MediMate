@@ -36,19 +36,26 @@ export function HeroSection() {
 
           <div className="flex flex-col sm:flex-row sm:items-center gap-3 pt-1">
             <Link
-              to="/login"
+              to="/login?mode=signup"
               className="inline-flex items-center justify-center gap-2 min-h-[44px] min-w-[44px] px-6 py-3 rounded-btn bg-brand-teal text-white text-base font-semibold hover:bg-brand-teal-dark transition-colors shadow-sm"
             >
-              <span>Get Started</span>
+              <span>Create an account</span>
               <ArrowRight className="w-4 h-4" aria-hidden="true" />
             </Link>
-            <a
-              href="#how-it-works"
+            <Link
+              to="/login"
               className="inline-flex items-center justify-center min-h-[44px] min-w-[44px] px-6 py-3 rounded-btn border-2 border-brand-teal bg-surface text-brand-teal text-base font-semibold hover:bg-brand-teal-light/40 transition-colors"
             >
-              See How It Works
-            </a>
+              Try the demo
+            </Link>
           </div>
+
+          <a
+            href="#how-it-works"
+            className="inline-flex items-center min-h-[44px] text-sm font-semibold text-brand-teal hover:text-brand-teal-dark underline underline-offset-4"
+          >
+            See how it works
+          </a>
 
           <p className="text-sm text-ink-muted">
             Installable web app (PWA) · Simple Mode for older adults · Real-time Care Circle timeline

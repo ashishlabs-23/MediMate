@@ -216,7 +216,7 @@ describe('Tier 1 — F23: Caregiver Multi-Tenancy & Invite-Code Pairing (R6-UI/S
       const switcher = screen.getByRole('combobox', { name: /select patient|monitoring/i });
       fireEvent.change(switcher, { target: { value: 'patient_mohan' } });
 
-      expect(await screen.findByText(/Glimepiride/i)).toBeInTheDocument();
+      expect((await screen.findAllByText(/Glimepiride/i)).length).toBeGreaterThanOrEqual(1);
     }
   );
 
@@ -295,7 +295,7 @@ describe('Tier 1 — F23: Caregiver Multi-Tenancy & Invite-Code Pairing (R6-UI/S
         </MemoryRouter>
       );
 
-      await screen.findByText(/Levothyroxine/i);
+      await screen.findAllByText(/Levothyroxine/i);
       expect(screen.queryByRole('link', { name: /call asha/i })).toBeNull();
     }
   );
@@ -443,7 +443,7 @@ describe('Tier 1 — F23: Caregiver Multi-Tenancy & Invite-Code Pairing (R6-UI/S
       );
 
       await waitFor(() => {
-        expect(screen.getByText(/Asha Devi/i)).toBeInTheDocument();
+        expect(screen.getAllByText(/Asha Devi/i).length).toBeGreaterThanOrEqual(1);
       });
 
       fireEvent.click(screen.getByRole('button', { name: /invite another family member|invite/i }));

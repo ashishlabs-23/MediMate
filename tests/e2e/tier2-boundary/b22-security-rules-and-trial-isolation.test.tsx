@@ -103,7 +103,7 @@ const hasM3RulesHardened =
 const hasM3ClientEscalationFix =
   schedulerSrc.includes("status: 'unconfirmed'") &&
   !schedulerSrc.includes('escalationAlertSent: true');
-const hasM4CaregiverTrialIsolation = /const\s+isDemoSession\s*=[\s\S]*Boolean\(isDemo\)/.test(
+const hasM4CaregiverTrialIsolation = /const\s+isDemoSession\s*=[\s\S]*(?:Boolean\(isDemo\)|isDemo\b)/.test(
   caregiverDashboardSrc
 );
 

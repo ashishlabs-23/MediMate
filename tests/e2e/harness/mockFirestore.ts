@@ -431,12 +431,8 @@ export class MockFirestoreDb {
           throw new PermissionDeniedError('Cannot reassign patientId on existing record');
         }
         if (collection === 'dose_logs') {
-          if (
-            existing &&
-            existing.status === 'taken' &&
-            data.status !== 'taken'
-          ) {
-            throw new PermissionDeniedError('Cannot revert a taken dose log to another status');
+          if (existing && (existing.status === 'taken' || existing.status === 'missed')) {
+            throw new PermissionDeniedError('Cannot modify a terminal dose log');
           }
           if (data.snoozeCount !== undefined) {
             if (
@@ -494,12 +490,8 @@ export class MockFirestoreDb {
     }
 
     if (collection === 'dose_logs') {
-      if (
-        existing.status === 'taken' &&
-        patch.status !== undefined &&
-        patch.status !== 'taken'
-      ) {
-        throw new PermissionDeniedError('Cannot revert a taken dose log to another status');
+      if (existing.status === 'taken' || existing.status === 'missed') {
+        throw new PermissionDeniedError('Cannot modify a terminal dose log');
       }
       const existingSnooze = typeof existing.snoozeCount === 'number' ? existing.snoozeCount : 0;
       const nextSnoozeCount =

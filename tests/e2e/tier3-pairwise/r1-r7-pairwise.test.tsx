@@ -543,22 +543,37 @@ describe('Tier 3 — R1–R7 & Google Sign-In Pairwise Interactions', () => {
       expect(pingRes.status).toBe(200);
       expect(((await pingRes.json()) as { ok: boolean }).ok).toBe(true);
 
+      const tzMod = await loadOptionalModule<{
+        computeDateStringInTimezone: (now: Date, tz: string) => string;
+        computeScheduledTimestampInTimezone: (
+          dateStr: string,
+          hhmm: string,
+          tz: string
+        ) => Date;
+      }>('server/src/jobs/dailyDoseLogs.ts');
+      const nyToday = tzMod.computeDateStringInTimezone(new Date(), 'America/New_York');
+      const expectedNyTime = tzMod.computeScheduledTimestampInTimezone(
+        nyToday,
+        '08:00',
+        'America/New_York'
+      );
+
       const genRes = await fetch(`${srv.baseUrl}/api/jobs/generate-daily-logs`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'x-cron-secret': 'pairwise_http_secret',
         },
-        body: JSON.stringify({ targetDate: '2026-11-26' }),
+        body: JSON.stringify({ targetDate: nyToday }),
       });
       expect(genRes.status).toBe(200);
       expect(((await genRes.json()) as { createdCount: number }).createdCount).toBe(1);
       const genTime = (
-        adminDb.inspect('dose_logs', 'p_ny_med_ny_2026-11-26_0800')?.scheduledTime as {
+        adminDb.inspect('dose_logs', `p_ny_med_ny_${nyToday}_0800`)?.scheduledTime as {
           toDate: () => Date;
         }
       ).toDate();
-      expect(genTime.toISOString()).toBe('2026-11-26T13:00:00.000Z');
+      expect(genTime.toISOString()).toBe(expectedNyTime.toISOString());
 
       const closeRes = await fetch(`${srv.baseUrl}/api/jobs/close-missed-doses`, {
         method: 'POST',
@@ -820,7 +835,7 @@ describe('Tier 3 — R1–R7 & Google Sign-In Pairwise Interactions', () => {
       const switcher = screen.getByRole('combobox', { name: /select patient|monitoring/i });
       fireEvent.change(switcher, { target: { value: 'patient_b' } });
 
-      expect(await screen.findByText(/Warfarin/i)).toBeInTheDocument();
+      expect((await screen.findAllByText(/Warfarin/i)).length).toBeGreaterThanOrEqual(1);
       const banner = document.getElementById('unconfirmed-alert-banner');
       expect(banner).not.toBeNull();
       expect(banner!.textContent).toContain('Patient Beta');

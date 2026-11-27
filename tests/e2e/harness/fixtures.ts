@@ -35,6 +35,7 @@ export function createCareCircleFixture(
 ): CareCircleDocument {
   const patientId = overrides.patientId ?? 'patient_ramesh';
   return {
+    ...overrides,
     id: overrides.id ?? patientId,
     patientId,
     patientName: overrides.patientName ?? 'Ramesh Sharma',

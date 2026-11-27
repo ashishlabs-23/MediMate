@@ -321,9 +321,11 @@ export interface CareCircleDocument {
   id: string;
   patientId: string;
   patientName: string;
+  patientPhone?: string;
   caregiverIds: string[];
   members: CareCircleMember[];
   inviteCode?: string;
+  lastRedeemedInviteCode?: string;
   createdAt: Date;
   updatedAt: Date;
   [key: string]: unknown;

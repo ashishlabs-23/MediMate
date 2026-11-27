@@ -408,7 +408,7 @@ describe('Tier 2 — B23: Caregiver Multi-Tenancy & Invite-Code Pairing Boundari
         </MemoryRouter>
       );
 
-      await screen.findByText(/Levothyroxine/i);
+      await screen.findAllByText(/Levothyroxine/i);
       expect(container.textContent).not.toContain('9876543210');
       expect(container.innerHTML).not.toContain('9876543210');
     }

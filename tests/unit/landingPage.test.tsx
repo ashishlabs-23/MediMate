@@ -101,12 +101,20 @@ describe('LandingPage & R1 Public Routing', () => {
     expect(screen.getAllByText(/UN SDG 3/i).length).toBeGreaterThanOrEqual(1);
 
     const signInLinks = screen.getAllByRole('link', { name: /sign in/i });
-    const getStartedLinks = screen.getAllByRole('link', { name: /get started/i });
+    const createAccountLinks = screen.getAllByRole('link', { name: /create account/i });
     expect(signInLinks.length).toBeGreaterThanOrEqual(1);
-    expect(getStartedLinks.length).toBeGreaterThanOrEqual(1);
-    for (const link of [...signInLinks, ...getStartedLinks]) {
+    expect(createAccountLinks.length).toBeGreaterThanOrEqual(1);
+    for (const link of signInLinks) {
       expect(link).toHaveAttribute('href', '/login');
     }
+    for (const link of createAccountLinks) {
+      expect(link).toHaveAttribute('href', '/login?mode=signup');
+    }
+
+    expect(screen.getByRole('link', { name: /try the demo/i })).toHaveAttribute(
+      'href',
+      '/login'
+    );
 
     const howItWorksCta = screen.getByRole('link', { name: /see how it works/i });
     expect(howItWorksCta).toHaveAttribute('href', '#how-it-works');

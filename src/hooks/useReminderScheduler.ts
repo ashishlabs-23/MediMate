@@ -216,7 +216,7 @@ export function useReminderScheduler(
           postSnoozeMs = dose.snoozeUntil.toMillis() + SNOOZE_DURATION_MS;
         } else if (dose.snoozedAt) {
           postSnoozeMs = dose.snoozedAt.toMillis() + 2 * SNOOZE_DURATION_MS;
-        } else if (dose.snoozeCount > 0) {
+        } else {
           postSnoozeMs = postSnoozeGentleTargetRef.current.get(dose.id) ?? 0;
         }
 
@@ -270,55 +270,51 @@ export function useReminderScheduler(
       }
 
       // ── T+30m  Escalation (sets status: 'unconfirmed' ONLY; backend sends FCM & sets escalationAlertSent) ──
+      // Safety ceiling T+30m takes precedence over active snooze (matches stateMachine & backend jobs).
+      let escalatedThisCycle = false;
+      let escalationInFlight = false;
+      let runEscalationCheck: (() => Promise<void>) | null = null;
       if (!dose.escalationAlertSent && dose.status !== 'unconfirmed') {
-        const runEscalationCheck = async () => {
-          if (cancelled) return;
-          const fresh = await readLatestDose(dose.id);
-          if (cancelled || !fresh) return;
-          const localDose = dosesRef.current.find((d) => d.id === dose.id);
-          if (
-            localDose &&
-            (localDose.status === 'taken' ||
-              localDose.status === 'missed' ||
-              localDose.status === 'unconfirmed' ||
-              localDose.escalationAlertSent)
-          ) {
-            return;
-          }
-          if (
-            fresh.status === 'taken' ||
-            fresh.status === 'missed' ||
-            fresh.status === 'unconfirmed' ||
-            fresh.escalationAlertSent
-          ) {
-            return;
-          }
-
-          // Respect active snooze: if currently in an active snooze window, do not escalate
-          if (fresh.status === 'snoozed' && fresh.snoozeUntil) {
-            const snoozeExpiresMs = fresh.snoozeUntil.toMillis();
-            if (Date.now() < snoozeExpiresMs) {
+        runEscalationCheck = async () => {
+          if (cancelled || escalatedThisCycle || escalationInFlight) return;
+          escalationInFlight = true;
+          try {
+            const fresh = await readLatestDose(dose.id);
+            if (cancelled || escalatedThisCycle || !fresh) return;
+            const localDose = dosesRef.current.find((d) => d.id === dose.id);
+            if (
+              localDose &&
+              (localDose.status === 'taken' ||
+                localDose.status === 'missed' ||
+                localDose.status === 'unconfirmed' ||
+                localDose.escalationAlertSent)
+            ) {
               return;
             }
-          }
-          if (localDose?.status === 'snoozed' && localDose.snoozeUntil) {
-            const localSnoozeExpiresMs = localDose.snoozeUntil.toMillis();
-            if (Date.now() < localSnoozeExpiresMs) {
+            if (
+              fresh.status === 'taken' ||
+              fresh.status === 'missed' ||
+              fresh.status === 'unconfirmed' ||
+              fresh.escalationAlertSent
+            ) {
               return;
             }
-          }
 
-          showNotification(
-            `🚨 URGENT: ${dose.medicationName} not taken`,
-            `${dose.dosage} has not been confirmed. Escalating to your caregiver.`,
-            `escalation-${dose.id}`
-          );
-          writeDosePatch(dose.id, { status: 'unconfirmed' });
+            escalatedThisCycle = true;
+            showNotification(
+              `🚨 URGENT: ${dose.medicationName} not taken`,
+              `${dose.dosage} has not been confirmed. Escalating to your caregiver.`,
+              `escalation-${dose.id}`
+            );
+            writeDosePatch(dose.id, { status: 'unconfirmed' });
+          } finally {
+            escalationInFlight = false;
+          }
         };
 
         const escalationDelay = escalationMs - now;
         if (escalationDelay > 0) {
-          timers.push(setTimeout(() => void runEscalationCheck(), escalationDelay));
+          timers.push(setTimeout(() => void runEscalationCheck?.(), escalationDelay));
         } else if (allowPastEscalationCatchup) {
           void runEscalationCheck();
         }
@@ -339,11 +335,18 @@ export function useReminderScheduler(
               if (localDose && (localDose.status === 'taken' || localDose.status === 'missed')) {
                 return;
               }
-              if (
-                fresh.status !== 'snoozed' ||
-                localDose?.status !== 'snoozed' ||
-                Date.now() >= escalationMs
-              ) {
+              if (fresh.status !== 'snoozed' || localDose?.status !== 'snoozed') {
+                return;
+              }
+              if (Date.now() >= escalationMs) {
+                if (
+                  runEscalationCheck &&
+                  !escalatedThisCycle &&
+                  !escalationInFlight &&
+                  allowPastEscalationCatchup
+                ) {
+                  void runEscalationCheck();
+                }
                 return;
               }
 
@@ -365,11 +368,18 @@ export function useReminderScheduler(
             if (localDose && (localDose.status === 'taken' || localDose.status === 'missed')) {
               return;
             }
-            if (
-              fresh.status !== 'snoozed' ||
-              localDose?.status !== 'snoozed' ||
-              Date.now() >= escalationMs
-            ) {
+            if (fresh.status !== 'snoozed' || localDose?.status !== 'snoozed') {
+              return;
+            }
+            if (Date.now() >= escalationMs) {
+              if (
+                runEscalationCheck &&
+                !escalatedThisCycle &&
+                !escalationInFlight &&
+                allowPastEscalationCatchup
+              ) {
+                void runEscalationCheck();
+              }
               return;
             }
             writeDosePatch(dose.id, { status: 'due', snoozeUntil: null });

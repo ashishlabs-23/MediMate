@@ -777,7 +777,7 @@ export function LoginScreen() {
                     htmlFor="fullName"
                     className="block mb-1.5 text-sm font-semibold text-slate-700"
                   >
-                    Display Name
+                    Your Full Name / Display Name
                     <span className="ml-1.5 text-[11px] font-normal text-slate-400">
                       (how you appear in MediMate)
                     </span>

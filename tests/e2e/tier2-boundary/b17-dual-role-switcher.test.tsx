@@ -64,6 +64,24 @@ vi.mock('@/lib/generateTodayLogs', () => ({
   generateTodayLogsForMedication: vi.fn(async () => 0),
 }));
 
+vi.mock('@/lib/careCircleService', () => ({
+  generateInviteCode: () => bridge.generateInviteCode(),
+  lookupCareInvite: (code: string) => bridge.lookupCareInvite(code),
+  createOrSyncCareInvite: (input: Parameters<typeof bridge.createOrSyncCareInvite>[0]) =>
+    bridge.createOrSyncCareInvite(input),
+  subscribeToCareCirclesForCaregiver: (
+    caregiverUid: string,
+    cb: Parameters<typeof bridge.subscribeToCareCirclesForCaregiver>[1],
+    onErr?: Parameters<typeof bridge.subscribeToCareCirclesForCaregiver>[2]
+  ) => bridge.subscribeToCareCirclesForCaregiver(caregiverUid, cb, onErr),
+  getCareCirclesForCaregiver: (caregiverUid: string) =>
+    bridge.getCareCirclesForCaregiver(caregiverUid),
+  redeemCareInviteCode: (
+    rawCode: string,
+    caregiver: { uid: string; displayName: string; email: string }
+  ) => bridge.redeemCareInviteCode(rawCode, caregiver),
+}));
+
 vi.mock('@/hooks/useReminderScheduler', () => ({
   useReminderScheduler: vi.fn(),
 }));

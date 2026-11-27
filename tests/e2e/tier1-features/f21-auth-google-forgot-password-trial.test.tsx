@@ -227,7 +227,7 @@ describe('Tier 1 — F21: Auth UX, Google Sign-In, Forgot Password & Trial Mode 
 
       const { unmount } = renderLoginWithRouter({ refreshUserProfile: refreshSpy });
       fireEvent.click(screen.getByRole('tab', { name: /create new account/i }));
-      fireEvent.change(screen.getByLabelText(/your full name/i), {
+      fireEvent.change(screen.getByLabelText(/display name|your full name/i), {
         target: { value: 'Kiran Nair' },
       });
       fireEvent.change(screen.getByLabelText(/email address/i), {

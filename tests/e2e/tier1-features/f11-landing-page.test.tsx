@@ -153,18 +153,33 @@ describe('Tier 1 — F11: Public Landing Page & Role-Aware Routing (R1)', () => 
   );
 
   it.runIf(hasLanding)(
-    'T1-F11-05: Sign In and Get Started CTAs navigate cleanly to /login in real <App />',
+    'T1-F11-05: Create Account opens signup while Sign In and demo links preserve their login paths',
     () => {
       window.history.pushState({}, '', '/');
-      render(<App />);
+      const { unmount } = render(<App />);
 
-      const getStartedLinks = screen.getAllByRole('link', { name: /get started/i });
-      expect(getStartedLinks.length).toBeGreaterThanOrEqual(1);
-      fireEvent.click(getStartedLinks[0]);
+      const createAccountLinks = screen.getAllByRole('link', { name: /create account/i });
+      expect(createAccountLinks.length).toBeGreaterThanOrEqual(1);
+      fireEvent.click(createAccountLinks[0]);
 
       expect(window.location.pathname).toBe('/login');
-      expect(screen.getByRole('button', { name: /sign in/i })).toBeInTheDocument();
+      expect(window.location.search).toBe('?mode=signup');
+      expect(screen.getByRole('tab', { name: /create new account/i })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      );
       expect(screen.getByLabelText(/email address/i)).toBeInTheDocument();
+      unmount();
+
+      window.history.pushState({}, '', '/');
+      render(<App />);
+      fireEvent.click(screen.getByRole('link', { name: /try the demo/i }));
+
+      expect(window.location.pathname).toBe('/login');
+      expect(window.location.search).toBe('');
+      expect(screen.getByRole('button', { name: /sign in/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /try older adult demo/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /try caregiver demo/i })).toBeInTheDocument();
     }
   );
 

@@ -268,4 +268,23 @@ describe('Tier 2 (Boundary) — F03: Firestore Security Rules (Patient Isolation
     };
     expect(() => db.getDoc('dose_logs', doseLog.id, spoofedAuth)).toThrow(PermissionDeniedError);
   });
+
+  it('T2-F03-08: Terminal missed dose logs cannot be modified', () => {
+    const db = new MockFirestoreDb();
+    const { patient } = seedPatientCareCircleScenario(db);
+    const patientAuth = { uid: patient.uid, role: 'elderly' as const };
+    const missedDose = createDoseLogFixture({
+      id: 'dose_missed_terminal',
+      patientId: patient.uid,
+      status: 'missed',
+    });
+    db.seedDoc('dose_logs', missedDose.id, missedDose);
+
+    expect(() =>
+      db.updateDoc('dose_logs', missedDose.id, { instructions: 'Changed after missed' }, patientAuth)
+    ).toThrow(PermissionDeniedError);
+    expect(() =>
+      db.updateDoc('dose_logs', missedDose.id, { status: 'due' }, patientAuth)
+    ).toThrow(PermissionDeniedError);
+  });
 });

@@ -45,11 +45,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [theme]);
 
   useEffect(() => {
-    if (theme !== 'system') return;
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    if (theme !== 'system') return undefined;
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    let cleanup: (() => void) | undefined;
     try {
       const mq = window.matchMedia('(prefers-color-scheme: dark)');
-      if (!mq) return;
+      if (!mq) return undefined;
       const handler = () => {
         const resolved = mq.matches ? 'dark' : 'light';
         setResolvedTheme(resolved);
@@ -59,12 +60,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       };
       if (typeof mq.addEventListener === 'function') {
         mq.addEventListener('change', handler);
-        return () => mq.removeEventListener('change', handler);
+        cleanup = () => mq.removeEventListener('change', handler);
       } else if (typeof (mq as any).addListener === 'function') {
         (mq as any).addListener(handler);
-        return () => (mq as any).removeListener(handler);
+        cleanup = () => (mq as any).removeListener(handler);
       }
     } catch {}
+    return cleanup;
   }, [theme]);
 
   function setTheme(t: ThemeMode) {
